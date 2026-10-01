@@ -1,0 +1,55 @@
+html, body { margin: 0; padding: 0; height: 100%; width: 100%; }
+body { font-family: var(--calcite-font-family, "Avenir Next", "Segoe UI", sans-serif); }
+
+/* ---------- boot screen ---------- */
+#boot { position: fixed; inset: 0; z-index: 999; display: flex; align-items: center; justify-content: center;
+        background: linear-gradient(135deg, #f4f1ea 0%, #e7eef6 100%); transition: opacity .4s; }
+#boot.hide { opacity: 0; pointer-events: none; }
+.boot-card { text-align: center; }
+.boot-title { font-size: 28px; font-weight: 700; color: #1f2937; }
+.boot-sub { margin-top: 6px; color: #6b7280; }
+.boot-bar { margin: 18px auto 0; width: 220px; height: 4px; background: #dfe5ec; border-radius: 4px; overflow: hidden; }
+.boot-bar div { width: 40%; height: 100%; background: #4a78b5; border-radius: 4px; animation: slide 1.2s ease-in-out infinite; }
+@keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(260%); } }
+
+/* ---------- header ---------- */
+.header-end { display: flex; align-items: center; gap: 6px; padding-inline-end: 8px; }
+.muted { color: #6b7280; font-size: 12px; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: #3fae6a; box-shadow: 0 0 0 0 rgba(63,174,106,.6); animation: pulse 2s infinite; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(63,174,106,.6); } 70% { box-shadow: 0 0 0 8px rgba(63,174,106,0); } 100% { box-shadow: 0 0 0 0 rgba(63,174,106,0); } }
+
+/* ---------- panels ---------- */
+#leftPanel { --calcite-shell-panel-width: 380px; --calcite-shell-panel-max-width: 420px; }
+.pad { padding: 12px; }
+.mt { margin-top: 10px; }
+.section-title { margin: 16px 0 6px; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #6b7280; }
+
+/* KPI tiles */
+.kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.kpi { background: #f6f7f9; border-radius: 10px; padding: 10px 12px; border: 1px solid #edf0f3; }
+.kpi .v { font-size: 24px; font-weight: 700; color: #1f2937; line-height: 1.1; }
+.kpi .l { font-size: 12px; color: #6b7280; margin-top: 2px; }
+.kpi .s { font-size: 11px; color: #9ca3af; }
+.kpi.green { background: #eaf6ee; border-color: #d4eedc; }
+.kpi.blue  { background: #eaf1fa; border-color: #d6e4f5; }
+.kpi.peach { background: #fdf1e7; border-color: #f8e0cb; }
+.kpi.mint  { background: #e8f6f3; border-color: #cfece6; }
+
+/* meter bars */
+.meter { height: 6px; border-radius: 4px; background: #e8ebef; overflow: hidden; margin-top: 4px; }
+.meter > div { height: 100%; border-radius: 4px; }
+
+/* status chips (match map symbology) */
+.chip { display: inline-block; padding: 2px 9px; border-radius: 10px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.st-Available            { background: #d4f0dc; color: #1e6b3a; }
+.st-Occupied---Loading   { background: #d8e6fa; color: #1f4f99; }
+.st-Occupied---Unloading { background: #ebe0f7; color: #5b2e8c; }
+.st-Out-of-Service       { background: #fadada; color: #a11d1d; }
+
+/* yard zone cards */
+.zone { background: #f8f9fb; border: 1px solid #edf0f3; border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; cursor: pointer; }
+.zone:hover { border-color: #c9d6e6; }
+.zone .h { display: flex; justify-content: space-between; font-weight: 600; color: #1f2937; }
+.zone .stack { display: flex; height: 10px; border-radius: 5px; overflow: hidden; margin-top: 8px; background: #eceff3; }
+.zone .legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; font-size: 11px; color: #6b7280; }
+.zone .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; }

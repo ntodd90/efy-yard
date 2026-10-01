@@ -1,6 +1,94 @@
-   <!DOCTYPE html>
-   <html><head><title>EFY Yard</title></head>
-   <body style="font-family:sans-serif;padding:40px">
-     <h1>Eemhaven Freight Yard</h1>
-     <p>Hosting works! App coming soon.</p>
-   </body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Eemhaven Freight Yard – Yard Operations</title>
+  <link rel="stylesheet" href="styles.css" />
+  <!-- ArcGIS Maps SDK for JavaScript 5.1: one tag loads core, map components and Calcite -->
+  <script type="module" src="https://js.arcgis.com/5.1/"></script>
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <!-- Full-screen loader shown until sign-in + map are ready -->
+  <div id="boot">
+    <div class="boot-card">
+      <div class="boot-title">Eemhaven Freight Yard</div>
+      <div class="boot-sub" id="bootMsg">Signing in to ArcGIS…</div>
+      <div class="boot-bar"><div></div></div>
+    </div>
+  </div>
+
+  <calcite-shell>
+    <!-- ===== Header ===== -->
+    <calcite-navigation slot="header">
+      <calcite-navigation-logo slot="logo" heading="Eemhaven Freight Yard"
+        description="Yard Operations · Port of Rotterdam" icon="dashboard"></calcite-navigation-logo>
+      <div slot="content-end" class="header-end">
+        <span class="live-dot"></span><span id="lastUpdated" class="muted">–</span>
+        <calcite-button id="refreshBtn" appearance="transparent" kind="neutral" icon-start="refresh">Refresh</calcite-button>
+        <calcite-button id="signOutBtn" appearance="transparent" kind="neutral" icon-start="sign-out">Sign out</calcite-button>
+      </div>
+      <calcite-navigation-user slot="user" id="userChip"></calcite-navigation-user>
+    </calcite-navigation>
+
+    <!-- ===== Left panel: action bar + content panels ===== -->
+    <calcite-shell-panel slot="panel-start" id="leftPanel" width="l">
+      <calcite-action-bar slot="action-bar" id="actionBar">
+        <calcite-action data-panel="overview" icon="dashboard" text="Overview" active></calcite-action>
+        <calcite-action data-panel="doors" icon="list" text="Dock Doors"></calcite-action>
+        <calcite-action data-panel="yard" icon="car" text="Trailer Yard"></calcite-action>
+        <calcite-action data-panel="layers" icon="layers" text="Layers"></calcite-action>
+        <calcite-action data-panel="legend" icon="legend" text="Legend"></calcite-action>
+      </calcite-action-bar>
+
+      <!-- Overview -->
+      <calcite-panel data-panel="overview" heading="Yard Overview" description="Live status across all buildings">
+        <div class="pad">
+          <div class="kpis" id="kpis"></div>
+          <div class="section-title">Buildings</div>
+          <calcite-list id="buildingList" selection-mode="none" label="Buildings"></calcite-list>
+        </div>
+      </calcite-panel>
+
+      <!-- Dock doors board -->
+      <calcite-panel data-panel="doors" heading="Dock Doors" description="Click a door to zoom to it" hidden>
+        <div class="pad">
+          <calcite-segmented-control id="doorFilter" width="full" scale="s">
+            <calcite-segmented-control-item value="all" checked>All</calcite-segmented-control-item>
+            <calcite-segmented-control-item value="Available">Free</calcite-segmented-control-item>
+            <calcite-segmented-control-item value="busy">Busy</calcite-segmented-control-item>
+            <calcite-segmented-control-item value="Out of Service">Down</calcite-segmented-control-item>
+          </calcite-segmented-control>
+          <calcite-list id="doorList" selection-mode="none" label="Dock doors" class="mt"></calcite-list>
+        </div>
+      </calcite-panel>
+
+      <!-- Trailer yard -->
+      <calcite-panel data-panel="yard" heading="Trailer Yard" description="Stall occupancy by zone" hidden>
+        <div class="pad" id="yardContent"></div>
+      </calcite-panel>
+
+      <!-- Layers / Legend -->
+      <calcite-panel data-panel="layers" heading="Layers" hidden>
+        <arcgis-layer-list reference-element="map" show-filter></arcgis-layer-list>
+      </calcite-panel>
+      <calcite-panel data-panel="legend" heading="Legend" hidden>
+        <arcgis-legend reference-element="map"></arcgis-legend>
+      </calcite-panel>
+    </calcite-shell-panel>
+
+    <!-- ===== Map ===== -->
+    <arcgis-map id="map">
+      <arcgis-zoom slot="top-left"></arcgis-zoom>
+      <arcgis-home slot="top-left"></arcgis-home>
+      <arcgis-floor-filter slot="top-right"></arcgis-floor-filter>
+    </arcgis-map>
+  </calcite-shell>
+
+  <calcite-alert id="errAlert" kind="danger" icon="exclamation-mark-triangle" label="Error">
+    <div slot="title">Something went wrong</div>
+    <div slot="message" id="errMsg"></div>
+  </calcite-alert>
+</body>
+</html>
