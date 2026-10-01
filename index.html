@@ -36,6 +36,7 @@
     <calcite-shell-panel slot="panel-start" id="leftPanel" width="l">
       <calcite-action-bar slot="action-bar" id="actionBar">
         <calcite-action data-panel="overview" icon="dashboard" text="Overview" active></calcite-action>
+        <calcite-action data-panel="views" icon="bookmark" text="Quick Views"></calcite-action>
         <calcite-action data-panel="doors" icon="list" text="Dock Doors"></calcite-action>
         <calcite-action data-panel="yard" icon="car" text="Trailer Yard"></calcite-action>
         <calcite-action data-panel="layers" icon="layers" text="Layers"></calcite-action>
@@ -48,6 +49,14 @@
           <div class="kpis" id="kpis"></div>
           <div class="section-title">Buildings</div>
           <calcite-list id="buildingList" selection-mode="none" label="Buildings"></calcite-list>
+        </div>
+      </calcite-panel>
+
+      <!-- Quick views -->
+      <calcite-panel data-panel="views" heading="Quick Views" description="Presenter shortcuts · keys 1–9" hidden>
+        <div class="pad">
+          <calcite-list id="viewList" selection-mode="single-persist" label="Quick views"></calcite-list>
+          <div class="notes" id="viewNotes"></div>
         </div>
       </calcite-panel>
 

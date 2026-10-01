@@ -53,3 +53,9 @@ body { font-family: var(--calcite-font-family, "Avenir Next", "Segoe UI", sans-s
 .zone .stack { display: flex; height: 10px; border-radius: 5px; overflow: hidden; margin-top: 8px; background: #eceff3; }
 .zone .legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; font-size: 11px; color: #6b7280; }
 .zone .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; }
+
+/* quick views: presenter notes */
+.notes { margin-top: 12px; background: #fbf8f1; border: 1px solid #efe6d2; border-radius: 10px; padding: 10px 12px; font-size: 13px; color: #374151; }
+.notes-title { font-weight: 700; margin-bottom: 4px; color: #1f2937; }
+.notes ul { margin: 4px 0 0 18px; padding: 0; }
+.notes li { margin: 3px 0; }

@@ -307,3 +307,18 @@ async function refresh() {
 $("refreshBtn").addEventListener("click", refresh);
 await refresh();
 setInterval(refresh, CONFIG.refreshSeconds * 1000);
+
+// -------------------------------------------------------------------------------------
+// 10. Quick views (views.js)
+// -------------------------------------------------------------------------------------
+try {
+  const { initViews } = await import("./views.js");
+  await initViews({
+    view,
+    floorFilterEl: document.querySelector("arcgis-floor-filter"),
+    listEl: $("viewList"),
+    notesEl: $("viewNotes")
+  });
+} catch (e) {
+  showError("Quick views failed to load.", e);
+}
