@@ -28,7 +28,7 @@
       <calcite-navigation-logo slot="logo" heading="Eemhaven Freight Yard"
         description="Yard Operations · Port of Rotterdam" thumbnail="container-mark.svg"></calcite-navigation-logo>
       <div slot="content-end" class="header-end">
-        <span class="traffic-status"><span class="traffic-live-dot"></span><span>3 vessels</span><strong>SIMULATED</strong></span>
+        <span class="traffic-status"><span class="traffic-live-dot"></span><span>3 vessels · 2 trucks</span><strong>SIMULATED</strong></span>
         <span class="live-dot"></span><span id="lastUpdated" class="muted">–</span>
         <calcite-button id="refreshBtn" appearance="transparent" kind="neutral" icon-start="refresh">Refresh</calcite-button>
         <calcite-button id="signOutBtn" appearance="transparent" kind="neutral" icon-start="sign-out">Sign out</calcite-button>
@@ -42,7 +42,11 @@
         <calcite-action data-panel="overview" icon="dashboard" text="Overview" active></calcite-action>
         <calcite-action data-panel="views" icon="bookmark" text="Quick Views"></calcite-action>
         <calcite-action data-panel="doors" icon="list" text="Dock Doors"></calcite-action>
-        <calcite-action data-panel="yard" icon="car" text="Trailer Yard"></calcite-action>
+        <calcite-action data-panel="yard" text="Trailer Yard" label="Trailer Yard">
+          <svg class="cargo-container-action-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <path d="M2 3.5h12v9H2zM5 4v8m3-8v8m3-8v8M3.5 2h9M4 14h8" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+        </calcite-action>
         <calcite-action data-panel="layers" icon="layers" text="Layers"></calcite-action>
         <calcite-action data-panel="legend" icon="legend" text="Legend"></calcite-action>
       </calcite-action-bar>

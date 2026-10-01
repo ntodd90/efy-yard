@@ -35,6 +35,7 @@ calcite-panel::part(heading) { font-family: "Barlow Condensed", sans-serif; font
 
 /* ---------- header ---------- */
 .header-end { display: flex; align-items: center; gap: 6px; padding-inline-end: 8px; }
+.cargo-container-action-icon { display: block; width: 16px; height: 16px; }
 .traffic-status { display: flex; align-items: center; gap: 6px; padding: 5px 9px; border-radius: 4px; background: #e9ece2; color: #18332e; font-size: 11px; font-weight: 600; white-space: nowrap; }
 .traffic-status strong { color: #9a3d27; font-size: 9px; letter-spacing: .04em; }
 .traffic-live-dot { width: 7px; height: 7px; border-radius: 50%; background: #087b70; box-shadow: 0 0 0 3px rgba(8,123,112,.14); }

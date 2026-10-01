@@ -105,8 +105,8 @@ const [GraphicsLayer, Graphic] = await $arcgis.import([
   "@arcgis/core/layers/GraphicsLayer.js",
   "@arcgis/core/Graphic.js"
 ]);
-const vesselLayer = new GraphicsLayer({ title: "Commercial Vessel Traffic (Simulated)" });
-view.map.add(vesselLayer);
+const trafficLayer = new GraphicsLayer({ title: "Multimodal Yard Traffic Telemetry (Simulated)" });
+view.map.add(trafficLayer);
 
 const canalRoute = [
   [4.4113111, 51.8785906], [4.4088365, 51.8814895], [4.4084111, 51.8819878],
@@ -142,7 +142,7 @@ const vessels = [
   { id: "NL-RTM-118", name: "MT Noordzee", type: "Product tanker", destination: "Nieuwe Maas", color: "#d9ed4d", draft: 4.2, distance: routeLength * 0.52, direction: -1, baseSpeed: 6.9, phase: 3.1 },
   { id: "NL-RTM-076", name: "MV Rijn Trader", type: "Dry-bulk coaster", destination: "Eemhaven", color: "#58b9ad", draft: 3.6, distance: routeLength * 0.84, direction: 1, baseSpeed: 7.8, phase: 4.9 }
 ];
-const simulatedSource = "Simulated telemetry; not live AIS. Track follows OpenStreetMap's Eemhaven canal centerline.";
+const simulatedSource = "Simulated telemetry; not live AIS or GPS.";
 const telemetryGraphics = vessels.map((vessel) => {
   const position = pointOnRoute(vessel.distance);
   const geometry = { type: "point", longitude: position.coordinates[0], latitude: position.coordinates[1] };
@@ -159,8 +159,106 @@ const telemetryGraphics = vessels.map((vessel) => {
     geometry,
     symbol: { type: "text", text: "", color: "#18332e", haloColor: "#fffef8", haloSize: 2, yoffset: 23, font: { family: "IBM Plex Sans", size: 9, weight: "bold" } }
   });
-  vesselLayer.addMany([ship, label]);
+  trafficLayer.addMany([ship, label]);
   return { vessel, ship, label };
+});
+
+const siteLayer = view.map.allLayers.find((layer) => layer.title === "Sites");
+const gateLayer = view.map.allLayers.find((layer) => layer.title === "Gates") ||
+  view.map.allLayers.find((layer) => layer.title === "GateLanes");
+const wgs84 = { wkid: 4326 };
+let yardCoordinate = [4.4044611, 51.8868569];
+let gateCoordinate = null;
+if (siteLayer) {
+  try {
+    await siteLayer.load();
+    const query = siteLayer.createQuery();
+    query.where = "1=1";
+    query.outSpatialReference = wgs84;
+    const result = await siteLayer.queryExtent(query);
+    if (result.extent) yardCoordinate = [result.extent.center.longitude, result.extent.center.latitude];
+  } catch (e) { console.warn("Could not locate the yard site for truck telemetry.", e); }
+}
+if (gateLayer) {
+  try {
+    await gateLayer.load();
+    const query = gateLayer.createQuery();
+    query.where = "1=1";
+    query.outFields = ["NAME", "LANE_DIR"];
+    query.outSpatialReference = wgs84;
+    query.returnGeometry = true;
+    const result = await gateLayer.queryFeatures(query);
+    const gate = result.features.find((feature) => /main gate/i.test(feature.attributes.NAME || "")) ||
+      result.features.find((feature) => String(feature.attributes.LANE_DIR || "").toLowerCase() === "in") ||
+      result.features[0];
+    if (gate) {
+      const point = gate.geometry.type === "point" ? gate.geometry : gate.geometry.extent.center;
+      gateCoordinate = [point.longitude, point.latitude];
+    }
+  } catch (e) { console.warn("Could not locate the yard gate for truck telemetry.", e); }
+}
+const destinationPoint = (origin, bearing, distance) => {
+  const radians = Math.PI / 180;
+  const angularDistance = distance / 6371000;
+  const bearingRadians = bearing * radians;
+  const latitude = origin[1] * radians;
+  const longitude = origin[0] * radians;
+  const endLatitude = Math.asin(Math.sin(latitude) * Math.cos(angularDistance) + Math.cos(latitude) * Math.sin(angularDistance) * Math.cos(bearingRadians));
+  const endLongitude = longitude + Math.atan2(Math.sin(bearingRadians) * Math.sin(angularDistance) * Math.cos(latitude), Math.cos(angularDistance) - Math.sin(latitude) * Math.sin(endLatitude));
+  return [endLongitude / radians, endLatitude / radians];
+};
+if (!gateCoordinate) gateCoordinate = destinationPoint(yardCoordinate, 90, 150);
+const yardToGateBearing = (() => {
+  const radians = Math.PI / 180;
+  const lat1 = yardCoordinate[1] * radians, lat2 = gateCoordinate[1] * radians;
+  const dLon = (gateCoordinate[0] - yardCoordinate[0]) * radians;
+  return (Math.atan2(Math.sin(dLon) * Math.cos(lat2), Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2)) * 180 / Math.PI + 360) % 360;
+})();
+const routeForTruck = (side) => {
+  const start = destinationPoint(gateCoordinate, yardToGateBearing, 700);
+  const outsideGate = destinationPoint(gateCoordinate, yardToGateBearing, 140);
+  return [
+    destinationPoint(start, yardToGateBearing + 90, side * 45),
+    destinationPoint(outsideGate, yardToGateBearing + 90, side * 24),
+    gateCoordinate,
+    yardCoordinate
+  ];
+};
+const makeTruckPath = (coordinates) => {
+  const distances = [0];
+  for (let i = 1; i < coordinates.length; i++) distances.push(distances[i - 1] + metersBetween(coordinates[i - 1], coordinates[i]));
+  return { coordinates, distances, length: distances.at(-1) };
+};
+const truckPosition = (path, distance) => {
+  const d = Math.max(0, Math.min(path.length, distance));
+  const endIndex = Math.max(1, path.distances.findIndex((end) => end >= d));
+  const start = path.coordinates[endIndex - 1], end = path.coordinates[endIndex];
+  const fraction = (d - path.distances[endIndex - 1]) / (path.distances[endIndex] - path.distances[endIndex - 1]);
+  const lat1 = start[1] * Math.PI / 180, lat2 = end[1] * Math.PI / 180;
+  const dLon = (end[0] - start[0]) * Math.PI / 180;
+  const bearing = (Math.atan2(Math.sin(dLon) * Math.cos(lat2), Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2)) * 180 / Math.PI + 360) % 360;
+  return { coordinates: [start[0] + (end[0] - start[0]) * fraction, start[1] + (end[1] - start[1]) * fraction], bearing };
+};
+const truckStopMs = 120000;
+const truckSpeedMps = 30 * 0.44704;
+const trucks = [
+  { id: "EFY-TRK-01", name: "Yard truck 01", side: -1, phase: "inbound", distance: 0, stoppedMs: 0 },
+  { id: "EFY-TRK-02", name: "Yard truck 02", side: 1, phase: "stopped", stoppedMs: 0 }
+].map((truck) => {
+  truck.path = makeTruckPath(routeForTruck(truck.side));
+  if (truck.phase === "stopped") truck.distance = truck.path.length;
+  const position = truckPosition(truck.path, truck.distance);
+  const graphic = new Graphic({
+    geometry: { type: "point", longitude: position.coordinates[0], latitude: position.coordinates[1] },
+    symbol: { type: "simple-marker", style: "circle", size: 9, color: "#ca4d32", outline: { color: "#fffef8", width: 1.5 } },
+    attributes: { vehicle: truck.name, vehicleId: truck.id, speed: truck.phase === "stopped" ? 0 : 30, status: truck.phase === "stopped" ? "Stopped at yard" : "Inbound to yard", destination: "Eemhaven Freight Yard", source: simulatedSource },
+    popupTemplate: {
+      title: "{vehicle}",
+      content: "<b>Vehicle ID:</b> {vehicleId}<br><b>Destination:</b> {destination}<br><b>Speed:</b> {speed} mph<br><b>Status:</b> {status}<br><b>Last update:</b> {lastUpdate}<br><b>Source:</b> {source}"
+    }
+  });
+  trafficLayer.add(graphic);
+  return { ...truck, graphic };
 });
 let previousTick = performance.now();
 function animateVessels(now) {
@@ -183,6 +281,27 @@ function animateVessels(now) {
       Object.assign(ship.attributes, { speed: speed.toFixed(1), heading, direction, lastUpdate: new Date().toLocaleTimeString() });
       label.geometry = geometry;
       label.symbol = { type: "text", text: `${vessel.name}  ${speed.toFixed(1)} kn`, color: "#18332e", haloColor: "#fffef8", haloSize: 2, yoffset: 23, font: { family: "IBM Plex Sans", size: 9, weight: "bold" } };
+    });
+    trucks.forEach((truck) => {
+      if (truck.phase === "inbound") {
+        truck.distance = Math.min(truck.path.length, truck.distance + truckSpeedMps * elapsed);
+        if (truck.distance >= truck.path.length) { truck.phase = "stopped"; truck.stoppedMs = 0; }
+      } else if (truck.phase === "stopped") {
+        truck.stoppedMs += elapsed * 1000;
+        if (truck.stoppedMs >= truckStopMs) truck.phase = "outbound";
+      } else {
+        truck.distance = Math.max(0, truck.distance - truckSpeedMps * elapsed);
+        if (truck.distance <= 0) truck.phase = "inbound";
+      }
+      const position = truckPosition(truck.path, truck.distance);
+      const status = truck.phase === "inbound" ? "Inbound to yard" : truck.phase === "stopped" ? "Stopped at yard" : "Outbound from yard";
+      truck.graphic.geometry = { type: "point", longitude: position.coordinates[0], latitude: position.coordinates[1] };
+      Object.assign(truck.graphic.attributes, {
+        speed: truck.phase === "stopped" ? 0 : 30,
+        heading: Math.round((position.bearing + (truck.phase === "outbound" ? 180 : 0)) % 360),
+        status,
+        lastUpdate: new Date().toLocaleTimeString()
+      });
     });
   }
   requestAnimationFrame(animateVessels);
