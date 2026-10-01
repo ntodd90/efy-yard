@@ -4,6 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Eemhaven Freight Yard – Yard Operations</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
   <!-- ArcGIS Maps SDK for JavaScript 5.1: one tag loads core, map components and Calcite -->
   <script type="module" src="https://js.arcgis.com/5.1/"></script>
@@ -23,8 +26,9 @@
     <!-- ===== Header ===== -->
     <calcite-navigation slot="header">
       <calcite-navigation-logo slot="logo" heading="Eemhaven Freight Yard"
-        description="Yard Operations · Port of Rotterdam" icon="dashboard"></calcite-navigation-logo>
+        description="Yard Operations · Port of Rotterdam" thumbnail="container-mark.svg"></calcite-navigation-logo>
       <div slot="content-end" class="header-end">
+        <span class="traffic-status"><span class="traffic-live-dot"></span><span>3 vessels</span><strong>SIMULATED</strong></span>
         <span class="live-dot"></span><span id="lastUpdated" class="muted">–</span>
         <calcite-button id="refreshBtn" appearance="transparent" kind="neutral" icon-start="refresh">Refresh</calcite-button>
         <calcite-button id="signOutBtn" appearance="transparent" kind="neutral" icon-start="sign-out">Sign out</calcite-button>
@@ -92,6 +96,10 @@
       <arcgis-zoom slot="top-left"></arcgis-zoom>
       <arcgis-home slot="top-left"></arcgis-home>
       <arcgis-floor-filter slot="top-right"></arcgis-floor-filter>
+      <arcgis-expand slot="top-right" group="top-right" expand-icon="basemap"
+        expand-tooltip="Change basemap" collapse-tooltip="Close basemaps" label="Basemap gallery">
+        <arcgis-basemap-gallery></arcgis-basemap-gallery>
+      </arcgis-expand>
     </arcgis-map>
   </calcite-shell>
 

@@ -101,6 +101,94 @@ const L = {
 };
 await Promise.all(Object.values(L).filter(Boolean).map((l) => l.load()));
 
+const [GraphicsLayer, Graphic] = await $arcgis.import([
+  "@arcgis/core/layers/GraphicsLayer.js",
+  "@arcgis/core/Graphic.js"
+]);
+const vesselLayer = new GraphicsLayer({ title: "Commercial Vessel Traffic (Simulated)" });
+view.map.add(vesselLayer);
+
+const canalRoute = [
+  [4.4113111, 51.8785906], [4.4088365, 51.8814895], [4.4084111, 51.8819878],
+  [4.4035964, 51.8876274], [4.4002698, 51.8915235], [4.3957054, 51.8968687]
+];
+const metersBetween = (a, b) => {
+  const radians = Math.PI / 180;
+  const lat1 = a[1] * radians, lat2 = b[1] * radians;
+  const dLat = lat2 - lat1, dLon = (b[0] - a[0]) * radians;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  return 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+};
+const routeDistances = [0];
+for (let i = 1; i < canalRoute.length; i++) {
+  routeDistances.push(routeDistances[i - 1] + metersBetween(canalRoute[i - 1], canalRoute[i]));
+}
+const routeLength = routeDistances.at(-1);
+const pointOnRoute = (distance) => {
+  const d = Math.max(0, Math.min(routeLength, distance));
+  const segment = Math.max(0, routeDistances.findIndex((end) => end >= d) - 1);
+  const start = canalRoute[segment], end = canalRoute[segment + 1];
+  const fraction = (d - routeDistances[segment]) / (routeDistances[segment + 1] - routeDistances[segment]);
+  const lat1 = start[1] * Math.PI / 180, lat2 = end[1] * Math.PI / 180;
+  const dLon = (end[0] - start[0]) * Math.PI / 180;
+  const bearing = (Math.atan2(Math.sin(dLon) * Math.cos(lat2), Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2)) * 180 / Math.PI + 360) % 360;
+  return { coordinates: [start[0] + (end[0] - start[0]) * fraction, start[1] + (end[1] - start[1]) * fraction], bearing };
+};
+const shipIcon = (color) => "data:image/svg+xml," + encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" width="36" height="60" viewBox="0 0 36 60"><path d="M18 2 29 15 27 43 22 55 18 59 14 55 9 43 7 15Z" fill="#102f36" stroke="#fffef8" stroke-width="2"/><path d="M11 19h14v17H11z" fill="${color}"/><path d="M13 22h4v5h-4zm6 0h4v5h-4zm-6 8h4v5h-4zm6 0h4v5h-4z" fill="#fffef8"/><path d="M12 40h12M14 45h8" stroke="#d9ed4d" stroke-width="2" stroke-linecap="round"/><path d="M15 12h6v5h-6z" fill="#fffef8"/></svg>`
+);
+const vessels = [
+  { id: "NL-RTM-204", name: "MV Delta Trader", type: "Container feeder", destination: "Waalhaven", color: "#e65c3b", draft: 5.8, distance: routeLength * 0.18, direction: 1, baseSpeed: 8.6, phase: 0.8 },
+  { id: "NL-RTM-118", name: "MT Noordzee", type: "Product tanker", destination: "Nieuwe Maas", color: "#d9ed4d", draft: 4.2, distance: routeLength * 0.52, direction: -1, baseSpeed: 6.9, phase: 3.1 },
+  { id: "NL-RTM-076", name: "MV Rijn Trader", type: "Dry-bulk coaster", destination: "Eemhaven", color: "#58b9ad", draft: 3.6, distance: routeLength * 0.84, direction: 1, baseSpeed: 7.8, phase: 4.9 }
+];
+const simulatedSource = "Simulated telemetry; not live AIS. Track follows OpenStreetMap's Eemhaven canal centerline.";
+const telemetryGraphics = vessels.map((vessel) => {
+  const position = pointOnRoute(vessel.distance);
+  const geometry = { type: "point", longitude: position.coordinates[0], latitude: position.coordinates[1] };
+  const ship = new Graphic({
+    geometry,
+    symbol: { type: "picture-marker", url: shipIcon(vessel.color), width: 24, height: 40, angle: position.bearing + (vessel.direction < 0 ? 180 : 0) },
+    attributes: { vessel: vessel.name, vesselId: vessel.id, vesselType: vessel.type, destination: vessel.destination, draft: vessel.draft, source: simulatedSource },
+    popupTemplate: {
+      title: "{vessel}",
+      content: "<b>Vessel ID:</b> {vesselId}<br><b>Type:</b> {vesselType}<br><b>Destination:</b> {destination}<br><b>Speed:</b> {speed} kn<br><b>Heading:</b> {heading}°<br><b>Draft:</b> {draft} m<br><b>Track:</b> {direction}<br><b>Source:</b> {source}"
+    }
+  });
+  const label = new Graphic({
+    geometry,
+    symbol: { type: "text", text: "", color: "#18332e", haloColor: "#fffef8", haloSize: 2, yoffset: 23, font: { family: "IBM Plex Sans", size: 9, weight: "bold" } }
+  });
+  vesselLayer.addMany([ship, label]);
+  return { vessel, ship, label };
+});
+let previousTick = performance.now();
+function animateVessels(now) {
+  if (now - previousTick >= 700) {
+    const elapsed = Math.min((now - previousTick) / 1000, 1.5);
+    previousTick = now;
+    telemetryGraphics.forEach(({ vessel, ship, label }) => {
+      const speed = vessel.baseSpeed + Math.sin(now / 8500 + vessel.phase) * 0.35;
+      vessel.distance += vessel.direction * speed * 0.514444 * elapsed * 5;
+      if (vessel.distance >= routeLength || vessel.distance <= 0) {
+        vessel.distance = Math.max(0, Math.min(routeLength, vessel.distance));
+        vessel.direction *= -1;
+      }
+      const position = pointOnRoute(vessel.distance);
+      const heading = Math.round((position.bearing + (vessel.direction < 0 ? 180 : 0)) % 360);
+      const geometry = { type: "point", longitude: position.coordinates[0], latitude: position.coordinates[1] };
+      const direction = vessel.direction > 0 ? "Northwestbound" : "Southeastbound";
+      ship.geometry = geometry;
+      ship.symbol = { type: "picture-marker", url: shipIcon(vessel.color), width: 24, height: 40, angle: heading };
+      Object.assign(ship.attributes, { speed: speed.toFixed(1), heading, direction, lastUpdate: new Date().toLocaleTimeString() });
+      label.geometry = geometry;
+      label.symbol = { type: "text", text: `${vessel.name}  ${speed.toFixed(1)} kn`, color: "#18332e", haloColor: "#fffef8", haloSize: 2, yoffset: 23, font: { family: "IBM Plex Sans", size: 9, weight: "bold" } };
+    });
+  }
+  requestAnimationFrame(animateVessels);
+}
+requestAnimationFrame(animateVessels);
+
 // -------------------------------------------------------------------------------------
 // 3. Panel switching (action bar)
 // -------------------------------------------------------------------------------------
