@@ -46,6 +46,26 @@ const [esriConfig, OAuthInfo, esriId, Portal] = await $arcgis.import([
   "@arcgis/core/identity/IdentityManager.js",
   "@arcgis/core/portal/Portal.js"
 ]);
+const yardAction = document.querySelector('#actionBar [data-panel="yard"]');
+if (yardAction && !yardAction.querySelector(".cargo-container-action-icon")) {
+  yardAction.removeAttribute("icon");
+  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  icon.setAttribute("class", "cargo-container-action-icon");
+  icon.setAttribute("viewBox", "0 0 16 16");
+  icon.setAttribute("aria-hidden", "true");
+  icon.setAttribute("focusable", "false");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M2 3.5h12v9H2zM5 4v8m3-8v8m3-8v8M3.5 2h9M4 14h8");
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-width", "1.35");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  icon.append(path);
+  yardAction.append(icon);
+}
+const brandLogo = document.querySelector("calcite-navigation-logo");
+if (brandLogo) brandLogo.setAttribute("thumbnail", "container-mark.svg?v=20261001-traffic");
 esriConfig.portalUrl = CONFIG.portalUrl;
 const oauth = new OAuthInfo({ appId: CONFIG.appId, portalUrl: CONFIG.portalUrl, popup: false });
 esriId.registerOAuthInfos([oauth]);
@@ -152,7 +172,7 @@ const telemetryGraphics = vessels.map((vessel) => {
     attributes: { vessel: vessel.name, vesselId: vessel.id, vesselType: vessel.type, destination: vessel.destination, draft: vessel.draft, source: simulatedSource },
     popupTemplate: {
       title: "{vessel}",
-      content: "<b>Vessel ID:</b> {vesselId}<br><b>Type:</b> {vesselType}<br><b>Destination:</b> {destination}<br><b>Speed:</b> {speed} kn<br><b>Heading:</b> {heading}°<br><b>Draft:</b> {draft} m<br><b>Track:</b> {direction}<br><b>Source:</b> {source}"
+      content: "<b>Vessel ID:</b> {vesselId}<br><b>Type:</b> {vesselType}<br><b>Destination:</b> {destination}<br><b>Speed:</b> {speed} kn<br><b>Heading:</b> {heading}°<br><b>Draft:</b> {draft} m<br><b>Track:</b> {direction}<br><b>Navigation:</b> {navigation}<br><b>Source:</b> {source}"
     }
   });
   const label = new Graphic({
@@ -250,7 +270,7 @@ const trucks = [
   const position = truckPosition(truck.path, truck.distance);
   const graphic = new Graphic({
     geometry: { type: "point", longitude: position.coordinates[0], latitude: position.coordinates[1] },
-    symbol: { type: "simple-marker", style: "circle", size: 9, color: "#ca4d32", outline: { color: "#fffef8", width: 1.5 } },
+    symbol: { type: "simple-marker", style: "circle", size: 12, color: "#d9ed4d", outline: { color: "#153a35", width: 2 } },
     attributes: { vehicle: truck.name, vehicleId: truck.id, speed: truck.phase === "stopped" ? 0 : 30, status: truck.phase === "stopped" ? "Stopped at yard" : "Inbound to yard", destination: "Eemhaven Freight Yard", source: simulatedSource },
     popupTemplate: {
       title: "{vehicle}",
@@ -265,7 +285,7 @@ function animateVessels(now) {
   if (now - previousTick >= 700) {
     const elapsed = Math.min((now - previousTick) / 1000, 1.5);
     previousTick = now;
-    telemetryGraphics.forEach(({ vessel, ship, label }) => {
+    const vesselStates = telemetryGraphics.map(({ vessel }) => {
       const speed = vessel.baseSpeed + Math.sin(now / 8500 + vessel.phase) * 0.35;
       vessel.distance += vessel.direction * speed * 0.514444 * elapsed * 5;
       if (vessel.distance >= routeLength || vessel.distance <= 0) {
@@ -274,13 +294,30 @@ function animateVessels(now) {
       }
       const position = pointOnRoute(vessel.distance);
       const heading = Math.round((position.bearing + (vessel.direction < 0 ? 180 : 0)) % 360);
+      return { vessel, speed, position, heading };
+    });
+    telemetryGraphics.forEach(({ ship, label }, index) => {
+      const { vessel, speed, position, heading } = vesselStates[index];
+      const nearestOncoming = vesselStates.reduce((nearest, other) => {
+        if (other.vessel === vessel || other.vessel.direction === vessel.direction) return nearest;
+        return Math.min(nearest, Math.abs(other.vessel.distance - vessel.distance));
+      }, Infinity);
+      const passingStrength = Math.max(0, Math.min(1, (520 - nearestOncoming) / 340));
+      const passingOffset = passingStrength * 42;
+      const coordinates = passingOffset
+        ? destinationPoint(position.coordinates, (heading + 90) % 360, passingOffset)
+        : position.coordinates;
       const geometry = { type: "point", longitude: position.coordinates[0], latitude: position.coordinates[1] };
       const direction = vessel.direction > 0 ? "Northwestbound" : "Southeastbound";
+      if (passingOffset) {
+        geometry.longitude = coordinates[0];
+        geometry.latitude = coordinates[1];
+      }
       ship.geometry = geometry;
       ship.symbol = { type: "picture-marker", url: shipIcon(vessel.color), width: 24, height: 40, angle: heading };
-      Object.assign(ship.attributes, { speed: speed.toFixed(1), heading, direction, lastUpdate: new Date().toLocaleTimeString() });
+      Object.assign(ship.attributes, { speed: speed.toFixed(1), heading, direction, navigation: passingStrength > 0.15 ? "Passing" : "Following canal route", lastUpdate: new Date().toLocaleTimeString() });
       label.geometry = geometry;
-      label.symbol = { type: "text", text: `${vessel.name}  ${speed.toFixed(1)} kn`, color: "#18332e", haloColor: "#fffef8", haloSize: 2, yoffset: 23, font: { family: "IBM Plex Sans", size: 9, weight: "bold" } };
+      label.symbol = { type: "text", text: `${vessel.name}  ${speed.toFixed(1)} kn${passingStrength > 0.15 ? "  PASSING" : ""}`, color: "#18332e", haloColor: "#fffef8", haloSize: 2, yoffset: 23, font: { family: "IBM Plex Sans", size: 9, weight: "bold" } };
     });
     trucks.forEach((truck) => {
       if (truck.phase === "inbound") {

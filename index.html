@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="styles.css" />
   <!-- ArcGIS Maps SDK for JavaScript 5.1: one tag loads core, map components and Calcite -->
   <script type="module" src="https://js.arcgis.com/5.1/"></script>
-  <script type="module" src="app.js"></script>
+  <script type="module" src="app.js?v=20261001-traffic"></script>
 </head>
 <body>
   <!-- Full-screen loader shown until sign-in + map are ready -->
@@ -26,7 +26,7 @@
     <!-- ===== Header ===== -->
     <calcite-navigation slot="header">
       <calcite-navigation-logo slot="logo" heading="Eemhaven Freight Yard"
-        description="Yard Operations · Port of Rotterdam" thumbnail="container-mark.svg"></calcite-navigation-logo>
+        description="Yard Operations · Port of Rotterdam" thumbnail="container-mark.svg?v=20261001-traffic"></calcite-navigation-logo>
       <div slot="content-end" class="header-end">
         <span class="traffic-status"><span class="traffic-live-dot"></span><span>3 vessels · 2 trucks</span><strong>SIMULATED</strong></span>
         <span class="live-dot"></span><span id="lastUpdated" class="muted">–</span>
