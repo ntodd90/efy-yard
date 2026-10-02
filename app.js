@@ -65,7 +65,7 @@ if (yardAction && !yardAction.querySelector(".cargo-container-action-icon")) {
   yardAction.append(icon);
 }
 const brandLogo = document.querySelector("calcite-navigation-logo");
-if (brandLogo) brandLogo.setAttribute("thumbnail", "container-mark.svg?v=20261001-traffic");
+if (brandLogo) brandLogo.setAttribute("thumbnail", "container-mark.svg?v=20261002-road-forklifts");
 esriConfig.portalUrl = CONFIG.portalUrl;
 const oauth = new OAuthInfo({ appId: CONFIG.appId, portalUrl: CONFIG.portalUrl, popup: false });
 esriId.registerOAuthInfos([oauth]);
@@ -186,17 +186,25 @@ const telemetryGraphics = vessels.map((vessel) => {
 const siteLayer = view.map.allLayers.find((layer) => layer.title === "Sites");
 const gateLayer = view.map.allLayers.find((layer) => layer.title === "Gates") ||
   view.map.allLayers.find((layer) => layer.title === "GateLanes");
+const roadwayLayer = view.map.allLayers.find((layer) => layer.title === "YardZones");
 const wgs84 = { wkid: 4326 };
-let yardCoordinate = [4.4044611, 51.8868569];
+let truckSpatialReference = wgs84;
+let yardCoordinate = null;
 let gateCoordinate = null;
+if (roadwayLayer) {
+  try {
+    await roadwayLayer.load();
+    truckSpatialReference = roadwayLayer.spatialReference;
+  } catch (e) { console.warn("Could not load yard road zones for truck routing.", e); }
+}
 if (siteLayer) {
   try {
     await siteLayer.load();
     const query = siteLayer.createQuery();
     query.where = "1=1";
-    query.outSpatialReference = wgs84;
+    query.outSpatialReference = truckSpatialReference;
     const result = await siteLayer.queryExtent(query);
-    if (result.extent) yardCoordinate = [result.extent.center.longitude, result.extent.center.latitude];
+    if (result.extent) yardCoordinate = [result.extent.center.x, result.extent.center.y];
   } catch (e) { console.warn("Could not locate the yard site for truck telemetry.", e); }
 }
 if (gateLayer) {
@@ -205,7 +213,7 @@ if (gateLayer) {
     const query = gateLayer.createQuery();
     query.where = "1=1";
     query.outFields = ["NAME", "LANE_DIR"];
-    query.outSpatialReference = wgs84;
+    query.outSpatialReference = truckSpatialReference;
     query.returnGeometry = true;
     const result = await gateLayer.queryFeatures(query);
     const gate = result.features.find((feature) => /main gate/i.test(feature.attributes.NAME || "")) ||
@@ -213,64 +221,178 @@ if (gateLayer) {
       result.features[0];
     if (gate) {
       const point = gate.geometry.type === "point" ? gate.geometry : gate.geometry.extent.center;
-      gateCoordinate = [point.longitude, point.latitude];
+      gateCoordinate = [point.x, point.y];
     }
   } catch (e) { console.warn("Could not locate the yard gate for truck telemetry.", e); }
 }
-const destinationPoint = (origin, bearing, distance) => {
-  const radians = Math.PI / 180;
-  const angularDistance = distance / 6371000;
-  const bearingRadians = bearing * radians;
-  const latitude = origin[1] * radians;
-  const longitude = origin[0] * radians;
-  const endLatitude = Math.asin(Math.sin(latitude) * Math.cos(angularDistance) + Math.cos(latitude) * Math.sin(angularDistance) * Math.cos(bearingRadians));
-  const endLongitude = longitude + Math.atan2(Math.sin(bearingRadians) * Math.sin(angularDistance) * Math.cos(latitude), Math.cos(angularDistance) - Math.sin(latitude) * Math.sin(endLatitude));
-  return [endLongitude / radians, endLatitude / radians];
+let roadwayGeometries = [];
+if (roadwayLayer && truckSpatialReference?.isGeographic === false) {
+  try {
+    const query = roadwayLayer.createQuery();
+    query.where = "ZONE_TYPE = 'Roadway'";
+    query.outFields = ["NAME", "ZONE_TYPE"];
+    query.returnGeometry = true;
+    const result = await roadwayLayer.queryFeatures(query);
+    roadwayGeometries = result.features.map((feature) => feature.geometry).filter((geometry) => geometry?.rings?.length);
+  } catch (e) { console.warn("Could not query roadway zones for truck routing.", e); }
+}
+const pointInRing = (x, y, ring) => {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
 };
-if (!gateCoordinate) gateCoordinate = destinationPoint(yardCoordinate, 90, 150);
-const yardToGateBearing = (() => {
-  const radians = Math.PI / 180;
-  const lat1 = yardCoordinate[1] * radians, lat2 = gateCoordinate[1] * radians;
-  const dLon = (gateCoordinate[0] - yardCoordinate[0]) * radians;
-  return (Math.atan2(Math.sin(dLon) * Math.cos(lat2), Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2)) * 180 / Math.PI + 360) % 360;
-})();
-const routeForTruck = (side) => {
-  const start = destinationPoint(gateCoordinate, yardToGateBearing, 700);
-  const outsideGate = destinationPoint(gateCoordinate, yardToGateBearing, 140);
-  return [
-    destinationPoint(start, yardToGateBearing + 90, side * 45),
-    destinationPoint(outsideGate, yardToGateBearing + 90, side * 24),
-    gateCoordinate,
-    yardCoordinate
-  ];
+const pointInRoad = (x, y) => roadwayGeometries.some((geometry) => {
+  if (x < geometry.extent.xmin || x > geometry.extent.xmax || y < geometry.extent.ymin || y > geometry.extent.ymax) return false;
+  let inside = false;
+  for (const ring of geometry.rings) if (pointInRing(x, y, ring)) inside = !inside;
+  return inside;
+});
+const buildRoadGrid = () => {
+  if (!roadwayGeometries.length) return null;
+  const extent = roadwayGeometries.reduce((bounds, geometry) => ({
+    xmin: Math.min(bounds.xmin, geometry.extent.xmin), ymin: Math.min(bounds.ymin, geometry.extent.ymin),
+    xmax: Math.max(bounds.xmax, geometry.extent.xmax), ymax: Math.max(bounds.ymax, geometry.extent.ymax)
+  }), { xmin: Infinity, ymin: Infinity, xmax: -Infinity, ymax: -Infinity });
+  const cellSize = 3;
+  const columns = Math.ceil((extent.xmax - extent.xmin) / cellSize) + 1;
+  const rows = Math.ceil((extent.ymax - extent.ymin) / cellSize) + 1;
+  if (columns * rows > 1200000) {
+    console.warn("Roadway area is too large for the local truck path grid.");
+    return null;
+  }
+  const walkable = new Uint8Array(columns * rows);
+  for (let row = 0; row < rows; row++) {
+    const y = extent.ymin + row * cellSize + cellSize / 2;
+    for (let column = 0; column < columns; column++) {
+      const x = extent.xmin + column * cellSize + cellSize / 2;
+      if (pointInRoad(x, y)) walkable[row * columns + column] = 1;
+    }
+  }
+  return { ...extent, cellSize, columns, rows, walkable };
 };
+const truckRoadGrid = buildRoadGrid();
+const findRoadCell = (coordinate) => {
+  if (!truckRoadGrid || !coordinate) return -1;
+  let nearest = -1, nearestDistance = Infinity;
+  for (let index = 0; index < truckRoadGrid.walkable.length; index++) {
+    if (!truckRoadGrid.walkable[index]) continue;
+    const column = index % truckRoadGrid.columns;
+    const row = Math.floor(index / truckRoadGrid.columns);
+    const x = truckRoadGrid.xmin + column * truckRoadGrid.cellSize + truckRoadGrid.cellSize / 2;
+    const y = truckRoadGrid.ymin + row * truckRoadGrid.cellSize + truckRoadGrid.cellSize / 2;
+    const distance = (x - coordinate[0]) ** 2 + (y - coordinate[1]) ** 2;
+    if (distance < nearestDistance) { nearest = index; nearestDistance = distance; }
+  }
+  return nearestDistance <= 180 ** 2 ? nearest : -1;
+};
+const findRoadRoute = (start, goal) => {
+  if (!truckRoadGrid || start < 0 || goal < 0) return null;
+  const { columns, rows, cellSize, walkable } = truckRoadGrid;
+  const count = columns * rows;
+  const cost = new Float64Array(count).fill(Infinity);
+  const previous = new Int32Array(count).fill(-1);
+  const visited = new Uint8Array(count);
+  const heap = [];
+  const push = (index, score) => {
+    let position = heap.length;
+    heap.push({ index, score });
+    while (position > 0) {
+      const parent = (position - 1) >> 1;
+      if (heap[parent].score <= score) break;
+      heap[position] = heap[parent];
+      position = parent;
+    }
+    heap[position] = { index, score };
+  };
+  const pop = () => {
+    const first = heap[0], last = heap.pop();
+    if (heap.length) {
+      let position = 0;
+      while (true) {
+        const left = position * 2 + 1, right = left + 1;
+        if (left >= heap.length) break;
+        const child = right < heap.length && heap[right].score < heap[left].score ? right : left;
+        if (heap[child].score >= last.score) break;
+        heap[position] = heap[child];
+        position = child;
+      }
+      heap[position] = last;
+    }
+    return first;
+  };
+  const heuristic = (index) => {
+    const dx = Math.abs(index % columns - goal % columns), dy = Math.abs(Math.floor(index / columns) - Math.floor(goal / columns));
+    return cellSize * (Math.max(dx, dy) + (Math.SQRT2 - 1) * Math.min(dx, dy));
+  };
+  cost[start] = 0;
+  push(start, heuristic(start));
+  while (heap.length) {
+    const current = pop().index;
+    if (visited[current]) continue;
+    if (current === goal) {
+      const route = [];
+      for (let index = goal; index !== -1; index = previous[index]) {
+        const column = index % columns, row = Math.floor(index / columns);
+        route.push([truckRoadGrid.xmin + column * cellSize + cellSize / 2, truckRoadGrid.ymin + row * cellSize + cellSize / 2]);
+      }
+      return route.reverse();
+    }
+    visited[current] = 1;
+    const column = current % columns, row = Math.floor(current / columns);
+    for (let rowOffset = -1; rowOffset <= 1; rowOffset++) for (let columnOffset = -1; columnOffset <= 1; columnOffset++) {
+      if (!rowOffset && !columnOffset) continue;
+      const nextColumn = column + columnOffset, nextRow = row + rowOffset;
+      if (nextColumn < 0 || nextColumn >= columns || nextRow < 0 || nextRow >= rows) continue;
+      const next = nextRow * columns + nextColumn;
+      if (!walkable[next] || visited[next]) continue;
+      if (rowOffset && columnOffset && (!walkable[row * columns + nextColumn] || !walkable[nextRow * columns + column])) continue;
+      const nextCost = cost[current] + cellSize * (rowOffset && columnOffset ? Math.SQRT2 : 1);
+      if (nextCost >= cost[next]) continue;
+      cost[next] = nextCost;
+      previous[next] = current;
+      push(next, nextCost + heuristic(next));
+    }
+  }
+  return null;
+};
+const roadStart = findRoadCell(gateCoordinate);
+const roadEnd = findRoadCell(yardCoordinate);
+const truckRoadRoute = findRoadRoute(roadStart, roadEnd);
+if (!truckRoadRoute) console.warn("Truck traffic paused: no connected roadway route links the yard gate and site.");
 const makeTruckPath = (coordinates) => {
   const distances = [0];
-  for (let i = 1; i < coordinates.length; i++) distances.push(distances[i - 1] + metersBetween(coordinates[i - 1], coordinates[i]));
+  for (let i = 1; i < coordinates.length; i++) {
+    const dx = coordinates[i][0] - coordinates[i - 1][0], dy = coordinates[i][1] - coordinates[i - 1][1];
+    distances.push(distances[i - 1] + Math.hypot(dx, dy));
+  }
   return { coordinates, distances, length: distances.at(-1) };
 };
 const truckPosition = (path, distance) => {
   const d = Math.max(0, Math.min(path.length, distance));
-  const endIndex = Math.max(1, path.distances.findIndex((end) => end >= d));
+  const endIndex = Math.min(path.coordinates.length - 1, Math.max(1, path.distances.findIndex((end) => end >= d)));
   const start = path.coordinates[endIndex - 1], end = path.coordinates[endIndex];
   const fraction = (d - path.distances[endIndex - 1]) / (path.distances[endIndex] - path.distances[endIndex - 1]);
-  const lat1 = start[1] * Math.PI / 180, lat2 = end[1] * Math.PI / 180;
-  const dLon = (end[0] - start[0]) * Math.PI / 180;
-  const bearing = (Math.atan2(Math.sin(dLon) * Math.cos(lat2), Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2)) * 180 / Math.PI + 360) % 360;
+  const bearing = (Math.atan2(end[0] - start[0], end[1] - start[1]) * 180 / Math.PI + 360) % 360;
   return { coordinates: [start[0] + (end[0] - start[0]) * fraction, start[1] + (end[1] - start[1]) * fraction], bearing };
 };
 const truckStopMs = 120000;
 const truckSpeedMps = 30 * 0.44704;
-const trucks = [
+const forkliftIcon = "data:image/svg+xml," + encodeURIComponent(
+  "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\" viewBox=\"0 0 32 32\"><path d=\"M9 9h13v15H9z\" fill=\"#d9ed4d\" stroke=\"#153a35\" stroke-width=\"2\"/><path d=\"M22 11h5v13h-5M25 7v19m0 0h6m-6-3h6\" fill=\"none\" stroke=\"#153a35\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/><path d=\"M5 12v9m0 0h4m-4-7h4\" fill=\"none\" stroke=\"#ca4d32\" stroke-width=\"2\" stroke-linecap=\"round\"/><circle cx=\"12\" cy=\"25\" r=\"2\" fill=\"#153a35\"/><circle cx=\"20\" cy=\"25\" r=\"2\" fill=\"#153a35\"/></svg>"
+);
+const trucks = truckRoadRoute ? [
   { id: "EFY-TRK-01", name: "Yard truck 01", side: -1, phase: "inbound", distance: 0, stoppedMs: 0 },
   { id: "EFY-TRK-02", name: "Yard truck 02", side: 1, phase: "stopped", stoppedMs: 0 }
 ].map((truck) => {
-  truck.path = makeTruckPath(routeForTruck(truck.side));
+  truck.path = makeTruckPath(truckRoadRoute);
   if (truck.phase === "stopped") truck.distance = truck.path.length;
   const position = truckPosition(truck.path, truck.distance);
   const graphic = new Graphic({
-    geometry: { type: "point", longitude: position.coordinates[0], latitude: position.coordinates[1] },
-    symbol: { type: "simple-marker", style: "circle", size: 12, color: "#d9ed4d", outline: { color: "#153a35", width: 2 } },
+    geometry: { type: "point", x: position.coordinates[0], y: position.coordinates[1], spatialReference: truckSpatialReference },
+    symbol: { type: "picture-marker", url: forkliftIcon, width: 22, height: 22, angle: (position.bearing + 270) % 360 },
     attributes: { vehicle: truck.name, vehicleId: truck.id, speed: truck.phase === "stopped" ? 0 : 30, status: truck.phase === "stopped" ? "Stopped at yard" : "Inbound to yard", destination: "Eemhaven Freight Yard", source: simulatedSource },
     popupTemplate: {
       title: "{vehicle}",
@@ -279,7 +401,9 @@ const trucks = [
   });
   trafficLayer.add(graphic);
   return { ...truck, graphic };
-});
+}) : [];
+const trafficCount = document.querySelector(".traffic-status > span:nth-child(2)");
+if (trafficCount) trafficCount.textContent = `3 vessels · ${trucks.length} trucks`;
 let previousTick = performance.now();
 function animateVessels(now) {
   if (now - previousTick >= 700) {
@@ -332,7 +456,8 @@ function animateVessels(now) {
       }
       const position = truckPosition(truck.path, truck.distance);
       const status = truck.phase === "inbound" ? "Inbound to yard" : truck.phase === "stopped" ? "Stopped at yard" : "Outbound from yard";
-      truck.graphic.geometry = { type: "point", longitude: position.coordinates[0], latitude: position.coordinates[1] };
+      truck.graphic.geometry = { type: "point", x: position.coordinates[0], y: position.coordinates[1], spatialReference: truckSpatialReference };
+      truck.graphic.symbol = { type: "picture-marker", url: forkliftIcon, width: 22, height: 22, angle: Math.round((position.bearing + 270 + (truck.phase === "outbound" ? 180 : 0)) % 360) };
       Object.assign(truck.graphic.attributes, {
         speed: truck.phase === "stopped" ? 0 : 30,
         heading: Math.round((position.bearing + (truck.phase === "outbound" ? 180 : 0)) % 360),
