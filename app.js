@@ -139,6 +139,16 @@ const metersBetween = (a, b) => {
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
   return 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 };
+const destinationPoint = (origin, bearing, distance) => {
+  const radians = Math.PI / 180;
+  const angularDistance = distance / 6371000;
+  const bearingRadians = bearing * radians;
+  const latitude = origin[1] * radians;
+  const longitude = origin[0] * radians;
+  const endLatitude = Math.asin(Math.sin(latitude) * Math.cos(angularDistance) + Math.cos(latitude) * Math.sin(angularDistance) * Math.cos(bearingRadians));
+  const endLongitude = longitude + Math.atan2(Math.sin(bearingRadians) * Math.sin(angularDistance) * Math.cos(latitude), Math.cos(angularDistance) - Math.sin(latitude) * Math.sin(endLatitude));
+  return [endLongitude / radians, endLatitude / radians];
+};
 const routeDistances = [0];
 for (let i = 1; i < canalRoute.length; i++) {
   routeDistances.push(routeDistances[i - 1] + metersBetween(canalRoute[i - 1], canalRoute[i]));
@@ -405,11 +415,15 @@ const trucks = truckRoadRoute ? [
 const trafficCount = document.querySelector(".traffic-status > span:nth-child(2)");
 if (trafficCount) trafficCount.textContent = `3 vessels · ${trucks.length} trucks`;
 let previousTick = performance.now();
-function animateVessels(now) {
-  if (now - previousTick >= 700) {
-    const elapsed = Math.min((now - previousTick) / 1000, 1.5);
-    previousTick = now;
-    const vesselStates = telemetryGraphics.map(({ vessel }) => {
+function animateTraffic(now) {
+  requestAnimationFrame(animateTraffic);
+  if (now - previousTick < 700) return;
+  const elapsed = Math.min((now - previousTick) / 1000, 1.5);
+  previousTick = now;
+
+  let vesselStates = [];
+  try {
+    vesselStates = telemetryGraphics.map(({ vessel }) => {
       const speed = vessel.baseSpeed + Math.sin(now / 8500 + vessel.phase) * 0.35;
       vessel.distance += vessel.direction * speed * 0.514444 * elapsed * 5;
       if (vessel.distance >= routeLength || vessel.distance <= 0) {
@@ -431,18 +445,19 @@ function animateVessels(now) {
       const coordinates = passingOffset
         ? destinationPoint(position.coordinates, (heading + 90) % 360, passingOffset)
         : position.coordinates;
-      const geometry = { type: "point", longitude: position.coordinates[0], latitude: position.coordinates[1] };
+      const geometry = { type: "point", longitude: coordinates[0], latitude: coordinates[1] };
       const direction = vessel.direction > 0 ? "Northwestbound" : "Southeastbound";
-      if (passingOffset) {
-        geometry.longitude = coordinates[0];
-        geometry.latitude = coordinates[1];
-      }
       ship.geometry = geometry;
       ship.symbol = { type: "picture-marker", url: shipIcon(vessel.color), width: 24, height: 40, angle: heading };
       Object.assign(ship.attributes, { speed: speed.toFixed(1), heading, direction, navigation: passingStrength > 0.15 ? "Passing" : "Following canal route", lastUpdate: new Date().toLocaleTimeString() });
       label.geometry = geometry;
       label.symbol = { type: "text", text: `${vessel.name}  ${speed.toFixed(1)} kn${passingStrength > 0.15 ? "  PASSING" : ""}`, color: "#18332e", haloColor: "#fffef8", haloSize: 2, yoffset: 23, font: { family: "IBM Plex Sans", size: 9, weight: "bold" } };
     });
+  } catch (error) {
+    console.error("Vessel telemetry update failed; continuing traffic animation.", error);
+  }
+
+  try {
     trucks.forEach((truck) => {
       if (truck.phase === "inbound") {
         truck.distance = Math.min(truck.path.length, truck.distance + truckSpeedMps * elapsed);
@@ -465,10 +480,11 @@ function animateVessels(now) {
         lastUpdate: new Date().toLocaleTimeString()
       });
     });
+  } catch (error) {
+    console.error("Forklift telemetry update failed; continuing traffic animation.", error);
   }
-  requestAnimationFrame(animateVessels);
 }
-requestAnimationFrame(animateVessels);
+requestAnimationFrame(animateTraffic);
 
 // -------------------------------------------------------------------------------------
 // 3. Panel switching (action bar)
