@@ -487,6 +487,146 @@ function animateTraffic(now) {
 requestAnimationFrame(animateTraffic);
 
 // -------------------------------------------------------------------------------------
+// Easter egg: click MV Delta Trader to summon a 16-bit sea monster
+// -------------------------------------------------------------------------------------
+const KAIJU_PALETTE = { K: "#0b1f1a", G: "#3f8f4a", L: "#6cc06a", B: "#c9d77a", S: "#8fd3e0", W: "#fffef8", R: "#e63b2e" };
+const KAIJU_BODY = [
+  "..............KKKKK",
+  ".............KGLLGGK",
+  "............KGLGGWRGK",
+  "......S.....KGGGGGGGGKK",
+  ".....SSK....KGGGGGGGGGGK",
+  ".....SKGK...KGGGGKWKWKWK",
+  "....SSKGGK..KGGGGGGGGGK",
+  "....SKGLGGKKGGGGGKKKKK",
+  "...SSKGLGGGGGGGGGK",
+  "...SKGLGGGGGGGGBBGK",
+  "..SSKGLGGGGGGGBBBBK.KK",
+  "..SKGLGGGGGGGGBBBBKKGGK",
+  ".SSKGLGGGGGGGGBBBBGGGWK",
+  ".SKGLGGGGGGGGGBBBBKKKK",
+  "SSKGLGGGGGGGGGBBBBK",
+  "SKGLGGGGGGGGGGBBBBK",
+  "KGLGGGGGGGGGGGBBBBK",
+  "KGLGGGGGGGGGGGBBBBK",
+  "KGLGGGGGGGGGGGBBBBK",
+  "KGLGGGGGGGGGGGBBBBK",
+  "KGLGGGGGGGGGGGBBBBK",
+  "KGLGGGGGGGGGGGBBBBK"
+];
+const KAIJU_ROAR = KAIJU_BODY.map((row, i) => ({
+  6: "....SSKGGK..KGGGGRRRRRRK",
+  7: "....SKGLGGKKGGGGRRRRRK",
+  8: "...SSKGLGGGGGGGGKWKWK",
+  9: "...SKGLGGGGGGGGBBKK"
+}[i] ?? row));
+let kaijuActive = false;
+
+function summonKaiju(mapPoint) {
+  if (kaijuActive) return;
+  kaijuActive = true;
+  const W = 64, H = 48, SCALE = 4, WATER = 36, CX = 26, X0 = 16;
+  const canvas = document.createElement("canvas");
+  canvas.width = W; canvas.height = H;
+  canvas.className = "kaiju-overlay";
+  canvas.style.width = `${W * SCALE}px`;
+  canvas.style.height = `${H * SCALE}px`;
+  canvas.setAttribute("aria-hidden", "true");
+  const roarText = document.createElement("div");
+  roarText.className = "kaiju-roar";
+  roarText.textContent = "ROAAAR!";
+  roarText.setAttribute("aria-hidden", "true");
+  document.body.append(canvas, roarText);
+  const ctx = canvas.getContext("2d");
+  const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const px = (x, y, color) => { ctx.fillStyle = color; ctx.fillRect(Math.round(x), Math.round(y), 1, 1); };
+  const drops = [];
+  const start = performance.now();
+  let lastTick = -1;
+
+  function frame(now) {
+    const t = now - start;
+    if (t > 5400) { canvas.remove(); roarText.remove(); kaijuActive = false; return; }
+    requestAnimationFrame(frame);
+    const tick = Math.floor(t / 83); // ~12 fps for a choppy retro feel
+    const roaring = t > 1900 && t < 3800;
+
+    // Keep the overlay pinned to the map location while the user pans/zooms.
+    const rect = mapEl.getBoundingClientRect();
+    const sp = view.toScreen(mapPoint);
+    if (!sp) return;
+    const shake = roaring && !reduceMotion ? [(tick % 2 ? 1 : -1) * SCALE, ((tick % 3) - 1) * SCALE] : [0, 0];
+    const left = rect.left + sp.x - CX * SCALE + shake[0];
+    const top = rect.top + sp.y - 46 * SCALE + shake[1];
+    canvas.style.transform = `translate(${left}px, ${top}px)`;
+    roarText.style.transform = `translate(${left + 34 * SCALE}px, ${top}px)`;
+    roarText.style.visibility = roaring && tick % 3 !== 0 ? "visible" : "hidden";
+
+    if (tick === lastTick) return;
+    lastTick = tick;
+    ctx.clearRect(0, 0, W, H);
+
+    const fullTop = WATER - KAIJU_BODY.length + 6;
+    let topY;
+    if (t < 500) topY = H;
+    else if (t < 1900) topY = H - Math.floor((H - fullTop) * (t - 500) / 1400);
+    else if (t < 4000) topY = fullTop + (tick % 6 < 3 ? 0 : 1);
+    else topY = fullTop + Math.floor((H - fullTop) * (t - 4000) / 1100);
+    topY = Math.min(H, topY);
+
+    if ((t > 500 && t < 1900) || (t > 4000 && t < 4600)) {
+      for (let i = 0; i < 3; i++) {
+        drops.push({ x: CX + (Math.random() - 0.5) * 24, y: WATER - 1, vx: (Math.random() - 0.5) * 1.4, vy: -1.5 - Math.random() * 2 });
+      }
+    }
+
+    const sprite = roaring && tick % 4 !== 0 ? KAIJU_ROAR : KAIJU_BODY;
+    const spine = roaring ? (tick % 2 ? "#e9fbff" : "#4fc3f7") : KAIJU_PALETTE.S;
+    sprite.forEach((row, r) => {
+      const y = topY + r;
+      if (y >= WATER) return;
+      [...row].forEach((ch, c) => {
+        const color = ch === "S" ? spine : KAIJU_PALETTE[ch];
+        if (color) px(X0 + c, y, color);
+      });
+    });
+
+    if (roaring && t > 2400) {
+      const by = topY + 7;
+      for (let x = X0 + 22; x < W; x++) {
+        px(x, by, tick % 2 ? "#e9fbff" : "#4fc3f7");
+        if ((x + tick) % 3 === 0) px(x, by - 1, "#4fc3f7");
+        if ((x + tick) % 3 === 1) px(x, by + 1, "#4fc3f7");
+      }
+    }
+
+    // Disturbed water patch in front of the body.
+    const swell = t < 500 ? t / 500 : t > 4600 ? Math.max(0, 1 - (t - 4600) / 700) : 1;
+    for (let dy = 0; dy < 5; dy++) {
+      const half = Math.round(22 * swell * Math.sqrt(1 - (dy / 5) ** 2));
+      for (let dx = -half; dx <= half; dx++) {
+        const x = CX + dx, y = WATER + dy;
+        const foam = dy === 0 || Math.abs(dx) >= half - 1 || (x + tick * 2 + dy * 3) % 7 === 0;
+        px(x, y, foam ? "#cfeff5" : dy % 2 ? "#2f6f8f" : "#3d86a6");
+      }
+    }
+
+    for (let i = drops.length - 1; i >= 0; i--) {
+      const d = drops[i];
+      d.x += d.vx; d.y += d.vy; d.vy += 0.35;
+      if (d.y > WATER) { drops.splice(i, 1); continue; }
+      px(d.x, d.y, i % 3 ? "#cfeff5" : "#fffef8");
+    }
+  }
+  requestAnimationFrame(frame);
+}
+
+mapEl.addEventListener("arcgisViewClick", async (event) => {
+  const { results } = await view.hitTest(event.detail, { include: [trafficLayer] });
+  if (results.some((r) => r.graphic?.attributes?.vesselId === "NL-RTM-204")) summonKaiju(event.detail.mapPoint);
+});
+
+// -------------------------------------------------------------------------------------
 // 3. Panel switching (action bar)
 // -------------------------------------------------------------------------------------
 $("actionBar").addEventListener("click", (evt) => {
