@@ -67,15 +67,49 @@ if (yardAction && !yardAction.querySelector(".cargo-container-action-icon")) {
 const brandLogo = document.querySelector("calcite-navigation-logo");
 if (brandLogo) brandLogo.setAttribute("thumbnail", "container-mark.svg?v=20261002-road-forklifts");
 esriConfig.portalUrl = CONFIG.portalUrl;
-const oauth = new OAuthInfo({ appId: CONFIG.appId, portalUrl: CONFIG.portalUrl, popup: false });
+// Opened directly: same-window redirect. Embedded in an iframe (exb Embed widget): ArcGIS
+// sign-in can't load inside the frame (X-Frame-Options), so use a popup + oauth-callback.html.
+const IN_FRAME = (() => { try { return window.self !== window.top; } catch { return true; } })();
+const oauth = new OAuthInfo({ appId: CONFIG.appId, portalUrl: CONFIG.portalUrl, popup: IN_FRAME, popupCallbackUrl: "oauth-callback.html" });
 esriId.registerOAuthInfos([oauth]);
 const sharingUrl = CONFIG.portalUrl + "/sharing";
+
+// In a frame the popup must be opened by a click (browsers block automatic popups).
+function framedSignIn() {
+  return new Promise((resolve) => {
+    bootMsg("Sign in to ArcGIS to load the app.");
+    const card = document.querySelector(".boot-card");
+    card.querySelector(".boot-bar")?.remove();
+    const box = document.createElement("div");
+    box.className = "boot-actions";
+    box.innerHTML = `<calcite-button id="frameSignIn" icon-start="sign-in" scale="l">Sign in</calcite-button>
+      <div class="boot-help">A small ArcGIS sign-in window will open. If nothing happens, allow pop-ups
+      for this site, or <a href="${location.href}" target="_blank" rel="noopener">open the app in a new tab</a>.</div>`;
+    card.appendChild(box);
+    $("frameSignIn").addEventListener("click", async () => {
+      $("frameSignIn").loading = true;
+      try {
+        await esriId.getCredential(sharingUrl);
+        box.remove();
+        resolve();
+      } catch (e) {
+        $("frameSignIn").loading = false;
+        bootMsg("Sign-in didn't finish. Try again, or open the app in a new tab.");
+        console.warn("[auth] popup sign-in failed", e);
+      }
+    });
+  });
+}
 
 try {
   await esriId.checkSignInStatus(sharingUrl);
 } catch {
-  bootMsg("Redirecting to ArcGIS sign-in…");
-  await esriId.getCredential(sharingUrl);   // navigates away; page reloads signed in
+  if (IN_FRAME) {
+    await framedSignIn();
+  } else {
+    bootMsg("Redirecting to ArcGIS sign-in…");
+    await esriId.getCredential(sharingUrl);   // navigates away; page reloads signed in
+  }
 }
 
 let portal;

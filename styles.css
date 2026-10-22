@@ -95,3 +95,8 @@ calcite-panel::part(heading) { font-family: "Barlow Condensed", sans-serif; font
 .kaiju-roar { position: fixed; left: 0; top: 0; z-index: 1001; pointer-events: none; visibility: hidden; white-space: nowrap;
         font: 700 24px/1 "Courier New", monospace; letter-spacing: 2px; color: #ffe14d;
         text-shadow: 3px 0 0 #0b1f1a, -3px 0 0 #0b1f1a, 0 3px 0 #0b1f1a, 0 -3px 0 #0b1f1a, 3px 3px 0 #0b1f1a; }
+
+/* ---------- in-frame sign-in (exb embed) ---------- */
+.boot-actions { margin-top: 18px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.boot-help { max-width: 320px; font-size: 12px; color: #d2e2d9; line-height: 1.4; }
+.boot-help a { color: #d9ed4d; }
