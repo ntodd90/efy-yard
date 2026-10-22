@@ -100,3 +100,13 @@ calcite-panel::part(heading) { font-family: "Barlow Condensed", sans-serif; font
 .boot-actions { margin-top: 18px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
 .boot-help { max-width: 320px; font-size: 12px; color: #d2e2d9; line-height: 1.4; }
 .boot-help a { color: #d9ed4d; }
+
+/* ---------- collapsible header (header.js) ---------- */
+calcite-navigation[slot="header"].nav-hidden { display: none !important; }
+#headerTab { position: fixed; top: 0; left: 50%; transform: translate(-50%, -100%); z-index: 50;
+  display: flex; align-items: center; justify-content: center; width: 44px; height: 18px; padding: 0;
+  border: 1px solid rgba(0,0,0,.12); border-top: none; border-radius: 0 0 8px 8px;
+  background: rgba(255,255,255,.92); color: #374151; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,.15);
+  transition: transform .2s ease; }
+#headerTab.show { transform: translate(-50%, 0); }
+#headerTab:hover { background: #fff; height: 22px; }
