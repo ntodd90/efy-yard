@@ -90,11 +90,39 @@ calcite-panel::part(heading) { font-family: "Barlow Condensed", sans-serif; font
 .notes ul { margin: 4px 0 0 18px; padding: 0; }
 .notes li { margin: 3px 0; }
 
+.picking-metrics { margin-top: 16px; border-top: 1px solid #d7ddd1; padding-top: 12px; }
+.pad:has(#pickingMetrics:not([hidden])) #viewList { display: block; max-height: 200px; overflow-y: auto; }
+.picking-heading, .picking-vehicle-title { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.picking-heading { flex-wrap: wrap; margin-bottom: 4px; }
+.picking-badge { font-size: 10px; font-weight: 700; color: #9a3d27; }
+.picking-metrics .kpi .v { font-size: 25px; overflow-wrap: anywhere; }
+.picking-summary { margin: 12px 0; font-size: 12px; }
+.picking-summary > div { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; border-bottom: 1px solid #d7ddd1; }
+.picking-summary dt { min-width: 0; }
+.picking-summary dd { margin: 0; font-weight: 600; text-align: right; }
+.picking-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.picking-controls label { display: flex; align-items: center; gap: 4px; font-size: 12px; }
+.picking-controls select { font: inherit; padding: 5px; color: #18332e; background: #fffef8; border: 1px solid #71817a; border-radius: 3px; }
+.picking-fleet { display: grid; gap: 8px; }
+.picking-vehicle { border: 1px solid #d7ddd1; border-left: 4px solid var(--forklift-color); border-radius: 4px; padding: 8px; background: #fffef8; min-width: 0; }
+.picking-vehicle-title { font-size: 13px; }
+.picking-trail-key { display: inline-block; width: 22px; margin-right: 6px; vertical-align: middle; border-top: 2px solid var(--forklift-color); }
+.picking-activity { font-size: 12px; margin: 5px 0; min-height: 18px; overflow-wrap: anywhere; }
+.picking-legend { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; }
+.picking-legend i { display: inline-block; width: 10px; height: 10px; margin-right: 4px; border-radius: 2px; }
+.picking-disclaimer { font-size: 11px; line-height: 1.5; color: #536760; }
+@media (max-width: 720px) {
+        #leftPanel { --calcite-shell-panel-width: min(340px, calc(100vw - 74px)); --calcite-shell-panel-max-width: min(340px, calc(100vw - 74px)); }
+        .picking-metrics .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 /* easter egg: MV Delta Trader sea monster */
 .kaiju-overlay { position: fixed; left: 0; top: 0; z-index: 1000; pointer-events: none; image-rendering: pixelated; }
 .kaiju-roar { position: fixed; left: 0; top: 0; z-index: 1001; pointer-events: none; visibility: hidden; white-space: nowrap;
         font: 700 24px/1 "Courier New", monospace; letter-spacing: 2px; color: #ffe14d;
         text-shadow: 3px 0 0 #0b1f1a, -3px 0 0 #0b1f1a, 0 3px 0 #0b1f1a, 0 -3px 0 #0b1f1a, 3px 3px 0 #0b1f1a; }
+
+.race-flag { position: fixed; top: 45%; left: 0; z-index: 1002; width: min(320px, 65vw); height: auto; aspect-ratio: 4 / 3; image-rendering: pixelated; pointer-events: none; transform: translate(-100%, -50%); }
 
 /* ---------- in-frame sign-in (exb embed) ---------- */
 .boot-actions { margin-top: 18px; display: flex; flex-direction: column; align-items: center; gap: 10px; }

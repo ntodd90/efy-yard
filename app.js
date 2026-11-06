@@ -870,14 +870,35 @@ setInterval(refresh, CONFIG.refreshSeconds * 1000);
 // -------------------------------------------------------------------------------------
 // 10. Quick views (views.js)
 // -------------------------------------------------------------------------------------
+let pickingController = null, activePicking = null;
+const picking = {
+  get extent() { return pickingController?.extent; },
+  setActive(id) {
+    activePicking = id;
+    $("pickingMetrics").hidden = !id;
+    if (pickingController) pickingController.setActive(id);
+  }
+};
+$("pickingMetrics").textContent = "Preparing simulated picking scenarios...";
 try {
-  const { initViews } = await import("./views.js");
+  const { initViews } = await import("./views.js?v=20261106-productivity-v4");
   await initViews({
     view,
     floorFilterEl: document.querySelector("arcgis-floor-filter"),
     listEl: $("viewList"),
-    notesEl: $("viewNotes")
+    notesEl: $("viewNotes"),
+    picking
   });
 } catch (e) {
   showError("Quick views failed to load.", e);
 }
+void (async () => {
+  try {
+    const { initPicking } = await import("./picking.js?v=20261106-race-v5");
+    pickingController = await initPicking({ view, metricsEl: $("pickingMetrics"), trafficLayer });
+    pickingController.setActive(activePicking);
+  } catch (e) {
+    console.warn("Picking scenarios unavailable.", e);
+    $("pickingMetrics").textContent = "Picking scenarios unavailable: " + (e.message || "Storage or dock data could not be loaded.");
+  }
+})();

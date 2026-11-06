@@ -7,11 +7,11 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles.css?v=20261106-race-v5" />
   <!-- ArcGIS Maps SDK for JavaScript 5.1: one tag loads core, map components and Calcite -->
   <script type="module" src="https://js.arcgis.com/5.1/"></script>
   <script type="module" src="header.js"></script>
-  <script type="module" src="app.js?v=20261002-road-forklifts"></script>
+  <script type="module" src="app.js?v=20261106-race-v5"></script>
 </head>
 <body>
   <!-- Full-screen loader shown until sign-in + map are ready -->
@@ -65,6 +65,7 @@
       <calcite-panel data-panel="views" heading="Quick Views" description="Presenter shortcuts · keys 1–9" hidden>
         <div class="pad">
           <calcite-list id="viewList" selection-mode="single-persist" label="Quick views"></calcite-list>
+          <section id="pickingMetrics" class="picking-metrics" aria-label="Picking optimization metrics" hidden></section>
           <div class="notes" id="viewNotes"></div>
         </div>
       </calcite-panel>

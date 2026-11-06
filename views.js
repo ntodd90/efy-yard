@@ -17,6 +17,20 @@ const BASE = ["sites", "zones", "rails"];
 
 export const VIEWS = [
   {
+    id: "current-picking", title: "current pick pattern", icon: "car", picking: "current",
+    desc: "Simulated week · dispersed beer inventory",
+    layers: [...BASE, ...INDOOR, "doors", "racks", "slots", "stalls"], target: { site: true }, floor: null,
+    notes: ["Simulated beer-distributor workload; not recorded forklift telemetry.",
+            "Frequently picked inventory is scattered across storage locations."]
+  },
+  {
+    id: "optimized-picking", title: "optimized pick pattern", icon: "lightbulb", picking: "optimized",
+    desc: "5% more picks · fast movers near dispatch",
+    layers: [...BASE, ...INDOOR, "doors", "racks", "slots", "stalls"], target: { site: true }, floor: null,
+    notes: ["Same four forklifts; optimized workload assumes 5% more weekly picks.",
+            "Illustrative slotting by dock distance; capacity, cold-chain and congestion constraints are not modeled."]
+  },
+  {
     id: "campus", title: "Campus overview", icon: "globe",
     desc: "Every building, floor and asset on one live map",
     layers: "default", target: { site: true },
@@ -120,7 +134,7 @@ export const VIEWS = [
 ];
 
 // -------------------------------------------------------------------------------------
-export async function initViews({ view, floorFilterEl, listEl, notesEl }) {
+export async function initViews({ view, floorFilterEl, listEl, notesEl, picking }) {
   // collect + classify layers
   const flayers = view.map.allLayers.filter((l) => l.type === "feature").toArray();
   await Promise.allSettled(flayers.map((l) => l.load()));
@@ -158,6 +172,7 @@ export async function initViews({ view, floorFilterEl, listEl, notesEl }) {
       const applies = v.filter && (v.filterCats ? v.filterCats.includes(c) : (c === "utilLine" || c === "utilPoint"));
       l.definitionExpression = applies ? (s.def ? `(${s.def}) AND (${v.filter})` : v.filter) : s.def;
     });
+    picking?.setActive(v.picking || null);
 
     // 2. floor
     try {
@@ -174,7 +189,9 @@ export async function initViews({ view, floorFilterEl, listEl, notesEl }) {
     try {
       const t = v.target || {};
       let ext = null, feat = null;
-      if (t.site) {
+      if (v.picking && picking?.extent) {
+        ext = picking.extent;
+      } else if (t.site) {
         const sites = layersOf("sites")[0];
         if (sites) ext = (await sites.queryExtent()).extent;
       } else if (t.facility) {
