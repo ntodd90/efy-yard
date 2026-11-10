@@ -122,11 +122,49 @@ function shuffle(items) {
   return result;
 }
 
+export function scheduleCongestion(fleet) {
+  const reservations = new Map(), cursors = fleet.map(() => 0), available = fleet.map(() => 0);
+  fleet.forEach((forklift) => { forklift.congestionSeconds = 0; forklift.waitSeconds = 0; forklift.conflicts = 0; });
+  const count = fleet.reduce((total, forklift) => total + forklift.trips.length, 0);
+  for (let completed = 0; completed < count; completed++) {
+    let selected = -1, arrival = Infinity;
+    fleet.forEach((forklift, index) => {
+      const trip = forklift.trips[cursors[index]];
+      if (!trip) return;
+      const candidate = available[index] + Math.max(0, trip.outbound.length - Math.min(8, trip.outbound.length / 4)) / ASSUMPTIONS.speed;
+      if (candidate < arrival) { arrival = candidate; selected = index; }
+    });
+    const forklift = fleet[selected], trip = forklift.trips[cursors[selected]];
+    const slot = trip.slot;
+    const area = slot.aisle ? `${slot.zone || ""}:${slot.aisle}` : `${Math.floor(slot.point[0] / 20)}:${Math.floor(slot.point[1] / 20)}`;
+    const key = `${slot.facility || "yard"}:${slot.level || "ground"}:${area}`;
+    const occupied = reservations.get(key);
+    const waiting = Math.max(0, (occupied?.until || 0) - arrival);
+    const approach = Math.min(8, trip.outbound.length / 4);
+    trip.startSeconds = available[selected];
+    trip.congestionSeconds = 0;
+    if (waiting > 0) {
+      const backup = Math.min(1.5, trip.outbound.length - approach);
+      trip.traffic = { atSeconds: (trip.outbound.length - approach) / ASSUMPTIONS.speed, waitSeconds: waiting,
+        maneuverSeconds: 6, backup, blockingForklift: occupied.forklift };
+      trip.congestionSeconds = waiting + trip.traffic.maneuverSeconds;
+      trip.distance += backup * 2;
+      forklift.distance += backup * 2;
+      forklift.congestionSeconds += trip.congestionSeconds;
+      forklift.waitSeconds += waiting;
+      forklift.conflicts++;
+    }
+    reservations.set(key, { until: arrival + trip.congestionSeconds + approach * 2 / ASSUMPTIONS.speed + ASSUMPTIONS.pickSeconds, forklift: forklift.id });
+    available[selected] += trip.travelSeconds + ASSUMPTIONS.pickSeconds + ASSUMPTIONS.unloadSeconds + trip.congestionSeconds;
+    cursors[selected]++;
+  }
+}
+
 export function buildScenarios(storage, docks, route, now = new Date(), { optimizedUplift = 0 } = {}) {
   if (!Number.isFinite(optimizedUplift) || optimizedUplift < 0 || optimizedUplift > 1) throw new Error("Optimized workload uplift must be between 0 and 1.");
   if (!storage.length || !docks.length) throw new Error("Picking requires storage locations and operational loading docks.");
   const slots = storage.map((slot) => {
-    const candidates = docks.filter((dock) => slot.kind === "container" || (dock.facility === slot.facility && dock.level === slot.level))
+    const candidates = docks.filter((dock) => dock.kind === "quay" || slot.kind === "container" || (dock.facility === slot.facility && dock.level === slot.level))
       .sort((first, second) => Math.hypot(first.point[0] - slot.point[0], first.point[1] - slot.point[1]) - Math.hypot(second.point[0] - slot.point[0], second.point[1] - slot.point[1])).slice(0, 3);
     let best = null;
     for (const dock of candidates) {
@@ -143,20 +181,51 @@ export function buildScenarios(storage, docks, route, now = new Date(), { optimi
     demand.set(slot.id, { sku: `BEER-${String(index + 1).padStart(4, "0")}`, frequency, daily: FREQUENCIES[frequency].daily });
   });
   const optimizedDemand = new Map();
+  const sectorFor = (slot) => `${slot.facility || "yard"}:${slot.level || "ground"}:${Math.floor(slot.point[0] / 60)}:${Math.floor(slot.point[1] / 60)}`;
   for (const group of new Set(slots.map((slot) => `${slot.kind}:${Boolean(slot.path)}`))) {
     const compatible = slots.filter((slot) => `${slot.kind}:${Boolean(slot.path)}` === group).sort((first, second) => (first.path?.length ?? Infinity) - (second.path?.length ?? Infinity) || first.id.localeCompare(second.id));
     const products = compatible.map((slot) => demand.get(slot.id)).sort((first, second) => second.daily - first.daily || first.sku.localeCompare(second.sku));
-    compatible.forEach((slot, index) => optimizedDemand.set(slot.id, products[index]));
+    const remaining = [...compatible], busySlots = [], sectorLoads = new Map(), aisleLoads = new Map();
+    for (const product of products) {
+      let selected = 0;
+      if (product.frequency === "High" && compatible[0]?.path) {
+        let bestScore = Infinity;
+        remaining.forEach((slot, index) => {
+          const separation = busySlots.reduce((nearest, busy) => Math.min(nearest, Math.hypot(slot.point[0] - busy.point[0], slot.point[1] - busy.point[1])), Infinity);
+          const aisle = slot.aisle ? `${slot.facility}:${slot.zone}:${slot.aisle}` : slot.id;
+          const score = slot.path.length + (sectorLoads.get(sectorFor(slot)) || 0) * 300 + (aisleLoads.get(aisle) || 0) * 600 + Math.max(0, 45 - separation) * 12;
+          if (score < bestScore) { bestScore = score; selected = index; }
+        });
+      }
+      const [slot] = remaining.splice(selected, 1);
+      optimizedDemand.set(slot.id, product);
+      if (product.frequency === "High") {
+        busySlots.push(slot);
+        sectorLoads.set(sectorFor(slot), (sectorLoads.get(sectorFor(slot)) || 0) + 1);
+        const aisle = slot.aisle ? `${slot.facility}:${slot.zone}:${slot.aisle}` : slot.id;
+        aisleLoads.set(aisle, (aisleLoads.get(aisle) || 0) + 1);
+      }
+    }
   }
+  const reachable = slots.filter((slot) => slot.path);
+  const racks = reachable.filter((slot) => slot.kind === "rack");
+  const rackSlots = (racks.length >= 4 ? racks : reachable).sort((first, second) => first.path.length - second.path.length || first.id.localeCompare(second.id));
+  const remoteSlots = new Set(rackSlots.slice(Math.floor(rackSlots.length * 0.75)).map((slot) => slot.id));
+  const nearSlots = slots.filter((slot) => slot.path && !remoteSlots.has(slot.id));
+  const dispatchAreaFor = (slot) => slot.aisle ? `${slot.facility}:${slot.level}:${slot.zone}:${slot.aisle}` : sectorFor(slot);
+  const sectorOwners = new Map();
+  [...new Set(nearSlots.map(dispatchAreaFor))].sort().forEach((sector, index) => sectorOwners.set(sector, index % 3));
+  const nearOwners = new Map(nearSlots.map((slot, index) => [slot.id, sectorOwners.size >= 3 ? sectorOwners.get(dispatchAreaFor(slot)) : index % 3]));
   const transfers = new Map();
   const scenario = (id, allocation) => {
-    const fleet = FORKLIFTS.map((forklift) => ({ ...forklift, trips: [], distance: 0, picks: 0, travelSeconds: 0, handlingSeconds: 0 }));
+    const fleet = FORKLIFTS.map((forklift, index) => ({ ...forklift, role: id === "optimized" ? index === 3 ? "Deep-storage picking" : "Zoned picking" : "Shared-aisle picking", trips: [], distance: 0, picks: 0, travelSeconds: 0, handlingSeconds: 0 }));
     const placements = slots.map((slot) => ({ ...slot, ...allocation.get(slot.id), weekly: allocation.get(slot.id).daily * 7 }));
     for (let day = 0; day < 7; day++) {
       placements.forEach((slot) => {
         if (!slot.path) return;
         for (let pick = 0; pick < slot.daily; pick++) {
-          const forklift = fleet[(Number(slot.sku.slice(5)) + pick + day) % fleet.length];
+          const owner = remoteSlots.has(slot.id) ? 3 : nearOwners.get(slot.id) ?? 0;
+          const forklift = fleet[id === "optimized" ? owner : (Number(slot.sku.slice(5)) + pick + day) % fleet.length];
           const trip = {
             slot, day, timestamp: week.start + day * 86400000 + (8 * 3600 + (Number(slot.sku.slice(5)) * 97 + pick * 331) % (8 * 3600)) * 1000,
           };
@@ -178,10 +247,18 @@ export function buildScenarios(storage, docks, route, now = new Date(), { optimi
       }
     }
     fleet.forEach((forklift) => {
-      forklift.trips.sort((first, second) => first.timestamp - second.timestamp);
+      const frequencyOrder = { High: 0, Medium: 1, Low: 2 };
+      forklift.trips.sort((first, second) => first.day - second.day
+        || (id === "current" ? frequencyOrder[first.slot.frequency] - frequencyOrder[second.slot.frequency]
+          : dispatchAreaFor(first.slot).localeCompare(dispatchAreaFor(second.slot)))
+        || first.slot.id.localeCompare(second.slot.id)
+        || first.timestamp - second.timestamp);
       forklift.trips.forEach((trip, index) => {
         const previous = forklift.trips[(index + forklift.trips.length - 1) % forklift.trips.length];
-        if (previous.slot.dock.id === trip.slot.dock.id) trip.outbound = trip.slot.path;
+        if (trip.slot.dock.kind === "quay") {
+          trip.outbound = route(previous.slot.dock.point, trip.slot.point);
+          if (!trip.outbound) throw new Error("No land route connects the quayside handoff to the warehouse pickup.");
+        } else if (previous.slot.dock.id === trip.slot.dock.id) trip.outbound = trip.slot.path;
         else {
           const key = `${previous.slot.dock.id}:${trip.slot.dock.id}`;
           if (!transfers.has(key)) transfers.set(key, route(previous.slot.dock.point, trip.slot.dock.point));
@@ -195,12 +272,14 @@ export function buildScenarios(storage, docks, route, now = new Date(), { optimi
         forklift.distance += trip.distance;
         forklift.travelSeconds += trip.travelSeconds;
       });
-      forklift.energy = forklift.distance / 1000 * ASSUMPTIONS.kwhPerKm;
     });
+    scheduleCongestion(fleet);
+    fleet.forEach((forklift) => { forklift.energy = forklift.distance / 1000 * ASSUMPTIONS.kwhPerKm; });
     const total = fleet.reduce((sum, forklift) => ({
       distance: sum.distance + forklift.distance, travelSeconds: sum.travelSeconds + forklift.travelSeconds,
-      handlingSeconds: sum.handlingSeconds + forklift.handlingSeconds, picks: sum.picks + forklift.picks, energy: sum.energy + forklift.energy
-    }), { distance: 0, travelSeconds: 0, handlingSeconds: 0, picks: 0, energy: 0 });
+      handlingSeconds: sum.handlingSeconds + forklift.handlingSeconds, picks: sum.picks + forklift.picks, energy: sum.energy + forklift.energy,
+      congestionSeconds: sum.congestionSeconds + forklift.congestionSeconds, waitSeconds: sum.waitSeconds + forklift.waitSeconds, conflicts: sum.conflicts + forklift.conflicts
+    }), { distance: 0, travelSeconds: 0, handlingSeconds: 0, picks: 0, energy: 0, congestionSeconds: 0, waitSeconds: 0, conflicts: 0 });
     return { id, fleet, placements, total, week, workloadUplift: id === "optimized" ? optimizedUplift : 0, excluded: slots.filter((slot) => !slot.path).length,
       schematic: fleet.reduce((count, forklift) => count + forklift.trips.filter((trip) => trip.outbound.schematic || trip.returnPath.schematic).length, 0) };
   };
@@ -212,17 +291,37 @@ export function replayTrip(trip, elapsed) {
   const returnPath = trip.returnPath || makePath([...trip.slot.path.points].reverse());
   const outbound = outboundPath.length / ASSUMPTIONS.speed;
   const travel = outbound + returnPath.length / ASSUMPTIONS.speed;
-  const duration = travel + ASSUMPTIONS.pickSeconds + ASSUMPTIONS.unloadSeconds;
-  const time = Math.max(0, Math.min(duration, elapsed));
+  const duration = travel + ASSUMPTIONS.pickSeconds + ASSUMPTIONS.unloadSeconds + (trip.congestionSeconds || 0);
+  let time = Math.max(0, Math.min(duration, elapsed));
+  let maneuverDistance = 0;
+  if (trip.traffic && time >= trip.traffic.atSeconds) {
+    const traffic = trip.traffic, local = time - traffic.atSeconds;
+    const maneuverHalf = traffic.maneuverSeconds / 2;
+    if (local < trip.congestionSeconds) {
+      const reverse = local < maneuverHalf ? traffic.backup * local / maneuverHalf
+        : local < maneuverHalf + traffic.waitSeconds ? traffic.backup
+        : traffic.backup * (1 - (local - maneuverHalf - traffic.waitSeconds) / maneuverHalf);
+      const position = positionOnPath(outboundPath, traffic.atSeconds * ASSUMPTIONS.speed - reverse);
+      const maneuvering = local < maneuverHalf || local >= maneuverHalf + traffic.waitSeconds;
+      const traveled = traffic.atSeconds * ASSUMPTIONS.speed + (local < maneuverHalf ? reverse : traffic.backup * 2 - reverse);
+      return { ...position, status: `${maneuvering ? "Maneuvering to yield to" : "Waiting for"} ${traffic.blockingForklift}`, loaded: false, duration, traveled, congested: true };
+    }
+    time -= trip.congestionSeconds;
+    maneuverDistance = traffic.backup * 2;
+  }
   let distance, status, loaded = false;
-  if (time < outbound) { distance = time * ASSUMPTIONS.speed; status = "Driving to pallet"; }
-  else if (time < outbound + ASSUMPTIONS.pickSeconds) { distance = outboundPath.length; status = "Picking pallet"; }
+  if (time < outbound) { distance = time * ASSUMPTIONS.speed; status = trip.slot?.dock?.kind === "quay" ? "Returning empty to warehouse" : "Driving to pallet"; }
+  else if (time < outbound + ASSUMPTIONS.pickSeconds) { distance = outboundPath.length; status = trip.slot?.dock?.kind === "quay" ? "Collecting warehouse container" : "Picking pallet"; }
   else if (time < travel + ASSUMPTIONS.pickSeconds) {
     distance = (time - outbound - ASSUMPTIONS.pickSeconds) * ASSUMPTIONS.speed;
-    status = "Delivering to dock"; loaded = true;
-  } else { distance = returnPath.length; status = "Unloading at dock"; loaded = true; }
+    status = trip.slot?.dock?.kind === "quay" ? "Delivering container to quay" : "Delivering to dock"; loaded = true;
+  } else { distance = returnPath.length; status = trip.slot?.dock?.kind === "quay" ? "Quayside handoff - awaiting crane" : "Unloading at dock"; loaded = true; }
   const position = positionOnPath(loaded ? returnPath : outboundPath, distance);
-  return { ...position, status, loaded, duration, traveled: loaded ? outboundPath.length + distance : distance };
+  return { ...position, status, loaded, duration, traveled: (loaded ? outboundPath.length + distance : distance) + maneuverDistance, congested: false };
+}
+
+export function breadcrumbTimestamp(epoch, ageSeconds) {
+  return Math.round(epoch - ageSeconds * 1000);
 }
 
 export function rollingBreadcrumbs(trips, tripIndex, elapsed, windowSeconds = 1800, sampleSeconds = 30) {

@@ -1,7 +1,28 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildScenarios, createRouter, lastWeek, replayTrip, makePath, positionOnPath, weeklyPaths, recentTrail, rollingBreadcrumbs, ASSUMPTIONS } from "./picking-model.js";
-import { isLoadingDock, FORKLIFT_SIZE, REPLAY_SPEEDS } from "./picking.js";
+import { buildScenarios, createRouter, lastWeek, replayTrip, makePath, positionOnPath, weeklyPaths, recentTrail, rollingBreadcrumbs, breadcrumbTimestamp, scheduleCongestion, ASSUMPTIONS } from "./picking-model.js";
+
+test("ArcGIS date fields receive integer timestamps despite fractional replay time", () => {
+  const epoch = 1793991153319.7;
+  assert.equal(breadcrumbTimestamp(epoch, 0), 1793991153320);
+  assert.ok(Number.isInteger(breadcrumbTimestamp(epoch, 30)));
+  assert.equal(breadcrumbTimestamp(epoch, 0) - breadcrumbTimestamp(epoch, 1800), 1800000);
+});
+import { isLoadingDock, FORKLIFT_SIZE, REPLAY_SPEEDS, DEFAULT_REPLAY_SPEED, DEFAULT_HEAT_VISIBLE, TRAVEL_HEAT_RENDERER, QUAY_HANDOFFS } from "./picking.js";
+
+test("the yard has exactly two explicit land-side ship-loading destinations", () => {
+  assert.deepEqual(QUAY_HANDOFFS.map((handoff) => handoff.id), ["QUAY-W", "QUAY-E"]);
+  assert.ok(QUAY_HANDOFFS.every((handoff) => handoff.kind === "quay" && handoff.point.every(Number.isFinite)));
+});
+
+test("travel heat is hidden and replay starts at 1x by default", () => {
+  assert.equal(DEFAULT_HEAT_VISIBLE, false);
+  assert.equal(DEFAULT_REPLAY_SPEED, 1);
+  assert.equal(TRAVEL_HEAT_RENDERER.type, "heatmap");
+  assert.equal(TRAVEL_HEAT_RENDERER.colorStops[0].color[3], 0);
+  assert.ok(TRAVEL_HEAT_RENDERER.radius > 0);
+  assert.ok(TRAVEL_HEAT_RENDERER.maxDensity > TRAVEL_HEAT_RENDERER.minDensity);
+});
 
 test("replay speeds include the 400x race option", () => {
   assert.deepEqual(REPLAY_SPEEDS, [1, 6, 20, 400]);
@@ -79,15 +100,19 @@ test("same weekly SKU demand and four forklifts, lower optimized travel", () => 
   const demand = (scenario) => scenario.placements.map((slot) => [slot.sku, slot.weekly]).sort();
   assert.deepEqual(demand(current), demand(optimized));
   assert.ok(optimized.total.distance < current.total.distance);
-  assert.equal(optimized.total.travelSeconds, optimized.total.distance / ASSUMPTIONS.speed);
+  assert.equal(optimized.total.travelSeconds, optimized.fleet.reduce((total, forklift) => total + forklift.trips.reduce((sum, trip) => sum + (trip.outbound.length + trip.returnPath.length) / ASSUMPTIONS.speed, 0), 0));
   assert.equal(current.total.handlingSeconds, optimized.total.handlingSeconds);
-  assert.deepEqual(current.fleet.map((forklift) => forklift.picks), optimized.fleet.map((forklift) => forklift.picks));
+  assert.ok(optimized.fleet.every((forklift) => forklift.picks > 0));
   assert.equal(current.total.picks, current.placements.reduce((total, slot) => total + slot.weekly, 0));
   current.fleet.forEach((forklift) => forklift.trips.forEach((trip) => {
     assert.ok(trip.timestamp >= current.week.start && trip.timestamp < current.week.end);
   }));
-  const sorted = [...optimized.placements].sort((first, second) => first.path.length - second.path.length);
-  sorted.forEach((slot, index) => { if (index) assert.ok(slot.daily <= sorted[index - 1].daily); });
+  const busy = optimized.placements.filter((slot) => slot.frequency === "High").sort((first, second) => first.point[0] - second.point[0]);
+  assert.ok(busy.at(-1).point[0] - busy[0].point[0] >= 180);
+  const remote = optimized.fleet[3];
+  assert.equal(remote.role, "Deep-storage picking");
+  assert.ok(remote.trips.every((trip) => trip.slot.path.length >= 310));
+  assert.ok(remote.trips[0].slot.path.length >= 310);
   assert.deepEqual(buildScenarios(storage, docks, route, new Date("2026-11-06T13:00:00Z")), scenarios);
 });
 
@@ -99,7 +124,7 @@ test("unreachable storage retains colors without changing served demand between 
   assert.equal(optimized.placements.length, storage.length);
   assert.equal(current.excluded, 1);
   assert.equal(current.total.picks, optimized.total.picks);
-  assert.deepEqual(current.fleet.map((forklift) => forklift.picks), optimized.fleet.map((forklift) => forklift.picks));
+  assert.equal(optimized.total.picks, optimized.fleet.reduce((total, forklift) => total + forklift.picks, 0));
   assert.equal(current.placements.find((slot) => slot.id === storage.at(-1).id).path, null);
 });
 
@@ -109,7 +134,7 @@ test("optimized productivity scenario includes 5% extra real simulated trips", (
   assert.equal(optimized.total.picks, optimized.fleet.reduce((total, forklift) => total + forklift.trips.length, 0));
   assert.equal(optimized.total.picks, optimized.placements.reduce((total, slot) => total + slot.weekly, 0));
   assert.equal(optimized.total.handlingSeconds, optimized.total.picks * (ASSUMPTIONS.pickSeconds + ASSUMPTIONS.unloadSeconds));
-  assert.equal(optimized.total.travelSeconds, optimized.total.distance / ASSUMPTIONS.speed);
+  assert.equal(optimized.total.travelSeconds, optimized.fleet.reduce((total, forklift) => total + forklift.travelSeconds, 0));
   assert.ok(optimized.total.travelSeconds + optimized.total.handlingSeconds < current.total.travelSeconds + current.total.handlingSeconds);
   assert.equal(optimized.workloadUplift, 0.05);
   assert.equal(current.workloadUplift, 0);
@@ -190,7 +215,7 @@ test("successive trips and the replay loop join at docks without teleporting", (
         const previous = forklift.trips[(index + forklift.trips.length - 1) % forklift.trips.length];
         assert.deepEqual(trip.outbound.points[0], previous.returnPath.points.at(-1));
         assert.deepEqual(trip.outbound.points.at(-1), trip.returnPath.points[0]);
-        assert.equal(trip.distance, trip.outbound.length + trip.returnPath.length);
+        assert.equal(trip.distance, trip.outbound.length + trip.returnPath.length + (trip.traffic?.backup || 0) * 2);
       });
     }
   }
@@ -203,4 +228,48 @@ test("weekly trips reuse storage routes and cache dock transfers across scenario
   buildScenarios(mixed, loading, (start, end) => { calls.push({ start, end }); return route(start, end); });
   assert.equal(calls.filter((call) => mixed.some((slot) => slot.point === call.end)).length, storage.length);
   assert.ok(calls.length <= storage.length + 2);
+});
+
+test("warehouse containers go directly to one of two quayside handoffs, never to warehouse doors", () => {
+  const quays = [{ id: "QUAY-W", kind: "quay", point: [0, 0] }, { id: "QUAY-E", kind: "quay", point: [500, 0] }];
+  const scenarios = buildScenarios(storage, quays, route);
+  for (const scenario of Object.values(scenarios)) {
+    assert.deepEqual(new Set(scenario.placements.filter((slot) => slot.path).map((slot) => slot.dock.id)), new Set(["QUAY-W", "QUAY-E"]));
+    for (const forklift of scenario.fleet) {
+      forklift.trips.forEach((trip, index) => {
+        const previous = forklift.trips[(index + forklift.trips.length - 1) % forklift.trips.length];
+        assert.deepEqual(trip.outbound.points[0], previous.slot.dock.point);
+        assert.deepEqual(trip.outbound.points.at(-1), trip.slot.point);
+        assert.deepEqual(trip.returnPath.points[0], trip.slot.point);
+        assert.deepEqual(trip.returnPath.points.at(-1), trip.slot.dock.point);
+        assert.equal(replayTrip(trip, Infinity).status, "Quayside handoff - awaiting crane");
+      });
+    }
+  }
+});
+
+test("shared rack approaches create real queue stops and on-route reversing", () => {
+  const outbound = makePath([[0, 0], [100, 0]]), returnPath = makePath([[100, 0], [0, 0]]);
+  const fleet = ["FL-01", "FL-02"].map((id) => ({ id, distance: 200, trips: [{ slot: { point: [100, 0], facility: "A", level: "A.L1", aisle: "01" }, outbound, returnPath, distance: 200, travelSeconds: 100 }] }));
+  scheduleCongestion(fleet);
+  const trip = fleet[1].trips[0];
+  assert.ok(trip.congestionSeconds > 0);
+  assert.equal(trip.traffic.blockingForklift, "FL-01");
+  const start = replayTrip(trip, trip.traffic.atSeconds), reversing = replayTrip(trip, trip.traffic.atSeconds + 1.5);
+  assert.ok(reversing.point[0] < start.point[0]);
+  assert.match(reversing.status, /Maneuvering/);
+  const waiting = replayTrip(trip, trip.traffic.atSeconds + 4);
+  assert.match(waiting.status, /Waiting for FL-01/);
+  assert.equal(waiting.point[1], 0);
+  assert.equal(replayTrip(trip, Infinity).duration, 160 + trip.congestionSeconds);
+  assert.equal(replayTrip(trip, Infinity).traveled, 200 + trip.traffic.backup * 2);
+  assert.ok(fleet[1].waitSeconds > 0);
+});
+
+test("zoned optimized picking reduces shared-aisle delays and retains four active forklifts", () => {
+  const { current, optimized } = buildScenarios(storage, docks, route);
+  assert.ok(current.total.conflicts > 0);
+  assert.ok(optimized.total.congestionSeconds < current.total.congestionSeconds);
+  assert.ok(optimized.fleet.every((forklift) => forklift.trips.length));
+  assert.equal(current.total.congestionSeconds, current.fleet.reduce((total, forklift) => total + forklift.congestionSeconds, 0));
 });

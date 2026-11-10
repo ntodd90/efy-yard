@@ -1,4 +1,4 @@
-import { makePath } from "./picking-model.js?v=20261106-productivity-v4";
+import { makePath } from "./picking-model.js?v=20261110-quayside-v10";
 
 function distanceToSegment(point, start, end) {
   const dx = end[0] - start[0], dy = end[1] - start[1];

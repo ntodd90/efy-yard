@@ -18,17 +18,18 @@ const BASE = ["sites", "zones", "rails"];
 export const VIEWS = [
   {
     id: "current-picking", title: "current pick pattern", icon: "car", picking: "current",
-    desc: "Simulated week · dispersed beer inventory",
+    desc: "Warehouse to quay · shared-aisle delays",
     layers: [...BASE, ...INDOOR, "doors", "racks", "slots", "stalls"], target: { site: true }, floor: null,
-    notes: ["Simulated beer-distributor workload; not recorded forklift telemetry.",
-            "Frequently picked inventory is scattered across storage locations."]
+        notes: ["Warehouse containers are delivered to one of the two marked land-side ship-loading handoffs.",
+          "Shared order batches and scattered cargo cause queues and extra travel. Forklifts stop on the dock; crane operations are not animated."]
   },
   {
     id: "optimized-picking", title: "optimized pick pattern", icon: "lightbulb", picking: "optimized",
-    desc: "5% more picks · fast movers near dispatch",
+    desc: "Warehouse to quay · efficient dispatch",
     layers: [...BASE, ...INDOOR, "doors", "racks", "slots", "stalls"], target: { site: true }, floor: null,
-    notes: ["Same four forklifts; optimized workload assumes 5% more weekly picks.",
-            "Illustrative slotting by dock distance; capacity, cold-chain and congestion constraints are not modeled."]
+        notes: ["Same four forklifts and the same two quayside destinations; the optimized workload assumes 5% more container moves.",
+          "Cargo placement and zoned dispatch reduce warehouse-to-quay travel and aisle contention; FL-04 still collects farther warehouse stock.",
+          "Loaded trips go directly to the land-side handoff. No forklift drives onto a ship, and no crane is animated."]
   },
   {
     id: "campus", title: "Campus overview", icon: "globe",

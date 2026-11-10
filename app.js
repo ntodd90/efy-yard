@@ -881,7 +881,7 @@ const picking = {
 };
 $("pickingMetrics").textContent = "Preparing simulated picking scenarios...";
 try {
-  const { initViews } = await import("./views.js?v=20261106-productivity-v4");
+  const { initViews } = await import("./views.js?v=20261110-quayside-v10");
   await initViews({
     view,
     floorFilterEl: document.querySelector("arcgis-floor-filter"),
@@ -894,7 +894,7 @@ try {
 }
 void (async () => {
   try {
-    const { initPicking } = await import("./picking.js?v=20261106-race-v5");
+    const { initPicking } = await import("./picking.js?v=20261110-quayside-v10");
     pickingController = await initPicking({ view, metricsEl: $("pickingMetrics"), trafficLayer });
     pickingController.setActive(activePicking);
   } catch (e) {

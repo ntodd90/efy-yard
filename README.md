@@ -3,12 +3,22 @@
 Static ArcGIS / Calcite yard operations demo. Open the app through a static server at
 http://127.0.0.1:5500/index.html and sign in to the configured ArcGIS organization.
 
-## Beer Distribution Picking Scenarios
+## Warehouse-to-Quay Scenarios
+
+The current workflow is **warehouse to ship-loading quay**, not delivery to
+warehouse doors. `QUAY-W` and `QUAY-E` are two explicit land-side handoffs on the
+southern quay, corresponding to the supplied ship-loading image. Yellow squares
+and labels mark them on the map. Every loaded trip runs directly from a warehouse
+storage position to one handoff; the forklift stops on the dock. Crane lifting and
+ship loading are deliberately not animated yet. Warehouse doors are routing
+access points only. Trailer parking is not used as a warehouse cargo source.
 
 Quick Views includes **current pick pattern** and **optimized pick pattern** (keys 1 and 2).
-Each has its own four moving forklifts and uniquely colored point breadcrumbs.
+Each has its own four moving forklifts and a travel heatmap built from point breadcrumbs.
 Breadcrumbs are point FeatureLayers with forklift IDs and date-valued timestamps.
-The default map shows a rolling 30-minute simulation window, sampled every 30
+Travel heat is off by default; the button beside the forklift filter toggles it quickly.
+Replay starts at 1x. When enabled, the heatmap shows relative routed sample density
+within a rolling 30-minute simulation window, sampled every 30
 simulated seconds. Samples follow the routed positions, including stops; repeated
 stationary samples are omitted. Replay speed controls the simulation clock.
 The forklift selector filters individual trails, and dated history shows a 30-minute
@@ -28,10 +38,14 @@ the same base SKU demand. The app's optimized scenario adds 5% more served palle
 picks, rounded to whole pallets, as an explicit simulated productivity assumption.
 Those additional trips are included in forklift, storage, travel, handling and energy
 totals; they are not just a KPI display adjustment. The pure model's default comparison
-retains equal demand unless the uplift option is enabled. Current fast movers are dispersed;
-optimized SKU groups are assigned to storage positions ranked by nearest operational
-dock travel distance, separately for pallet racks and trailer/container positions.
-Empty repositioning between successive delivery docks is included in travel totals.
+retains equal demand unless the uplift option is enabled. The current scenario sends
+shared order batches to the same busy rack aisles. Optimized slotting balances dock
+distance against spatial crowding and aisle demand within warehouse storage,
+spreading high-volume products instead of clustering them at the closest handoff.
+Three forklifts have zoned picking assignments; FL-04
+serves the farthest quarter of reachable racks, including its initial replay trip.
+Empty travel from the previous quay handoff to the next warehouse pickup is
+included in travel totals, along with the direct loaded trip back to the quay.
 Unreachable storage stays colored on the map but is excluded from both scenarios'
 travel totals. Optimization preserves the served workload and does not relocate
 reachable demand into unreachable storage. The optional optimized uplift adds work
@@ -39,15 +53,25 @@ only at reachable positions.
 
 Assumptions: 7.2 km/h, 35 seconds picking, 25 seconds unloading, 24 kWh batteries,
 and 0.45 kWh/km traction energy. Battery estimates exclude charging and auxiliary loads.
-Only ground-floor racks are used. Trailer parking stalls are a **container-storage
-proxy**, not actual container inventory. Cold-chain, capacity, relocation cost, congestion,
-aisle clearance, and operational scheduling constraints are not modeled.
+Only ground-floor warehouse racks are used as illustrative container pickup
+positions, not surveyed container inventory. Cold-chain, capacity, relocation cost,
+aisle clearance, and operational scheduling constraints are not validated.
+
+A shared-aisle reservation model schedules pick approaches across all four forklifts.
+If an approach is occupied, the arriving forklift backs up a short distance along
+its validated route, waits for the preceding forklift to clear, and advances again.
+No sideways motion or off-route passing path is invented. Weekly queue/maneuver
+delays, conflict counts and total labor time include this behavior; maneuver distance
+also contributes to travel and traction energy. The animation uses the same delayed
+trip timeline as the rolling heat samples. This is illustrative aisle traffic, not
+a validated warehouse traffic-control or collision-avoidance system.
 
 Routing uses the pinned CDN `pathfinding` A* engine on a 1.25 m grid. Cells are limited
 to the mapped site land, outdoor yard and accessible ground-floor units; racks,
 parked trailers and mapped walls are obstacles. Mapped loading-door openings connect
-the yard to indoor staging. Delivery endpoints are 4 m inside the dock face; storage
-endpoints snap to an accessible aisle within 8 m, rather than to a pallet's center.
+the yard to indoor storage. Delivery endpoints are on the land-side ship-loading
+quay, not at warehouse doors or on ships. Storage endpoints snap to an accessible
+aisle within 8 m, rather than to a rack's center.
 Diagonal corner-cutting is disabled. Simplified route segments must remain on
 walkable cells. There is no unrestricted fallback for disconnected routes.
 The three geometrically closest compatible docks are considered for each position.

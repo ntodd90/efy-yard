@@ -1,5 +1,5 @@
-import { buildScenarios } from "./picking-model.js?v=20261106-productivity-v4";
-import { createGridRouter } from "./picking-routing.js?v=20261106-productivity-v4";
+import { buildScenarios } from "./picking-model.js?v=20261110-quayside-v10";
+import { createGridRouter } from "./picking-routing.js?v=20261110-quayside-v10";
 
 self.onmessage = async ({ data }) => {
   try {
