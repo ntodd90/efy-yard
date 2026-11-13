@@ -7,11 +7,11 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=20261106-race-v5" />
+  <link rel="stylesheet" href="styles.css?v=20261113-reset-view-v22" />
   <!-- ArcGIS Maps SDK for JavaScript 5.1: one tag loads core, map components and Calcite -->
   <script type="module" src="https://js.arcgis.com/5.1/"></script>
   <script type="module" src="header.js"></script>
-  <script type="module" src="app.js?v=20261110-quayside-v10"></script>
+  <script type="module" src="app.js?v=20261113-reset-view-v21"></script>
 </head>
 <body>
   <!-- Full-screen loader shown until sign-in + map are ready -->
@@ -53,7 +53,10 @@
       </calcite-action-bar>
 
       <!-- Overview -->
-      <calcite-panel data-panel="overview" heading="Yard Overview" description="Live status across all buildings">
+      <calcite-panel data-panel="overview" description="Live status across all buildings">
+        <calcite-button slot="heading" id="resetViewBtn" appearance="transparent" kind="neutral" icon-start="reset" title="Return the map and filters to their initial state">
+          Yard Overview
+        </calcite-button>
         <div class="pad">
           <div class="kpis" id="kpis"></div>
           <div class="section-title">Buildings</div>

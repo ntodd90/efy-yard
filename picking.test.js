@@ -1,6 +1,88 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildScenarios, createRouter, lastWeek, replayTrip, makePath, positionOnPath, weeklyPaths, recentTrail, rollingBreadcrumbs, breadcrumbTimestamp, scheduleCongestion, ASSUMPTIONS } from "./picking-model.js";
+import { BERTH_VESSELS, vesselPoint, cargoDeliveryEvents, createBerthState, advanceBerth, berthSnapshot, cranePose } from "./shipping-model.js";
+
+test("ships fill only when crane cargo is placed, not when a forklift arrives", () => {
+  const vessel = { ...BERTH_VESSELS[0], initialStaged: 0, initialTeu: 10, capacityTeu: 12, cycleSeconds: 100 };
+  const state = createBerthState(vessel);
+  advanceBerth(state, 20);
+  assert.equal(state.onboard, 10);
+  advanceBerth(state, 64, [{ offsetSeconds: 0, units: 2 }]);
+  assert.equal(state.onboard, 10);
+  assert.equal(state.queue, 1);
+  advanceBerth(state, 1);
+  assert.equal(state.onboard, 11);
+  assert.equal(berthSnapshot(state).percentFull, 11 / 12 * 100);
+  advanceBerth(state, 300, [{ offsetSeconds: 200, units: 5 }]);
+  assert.equal(state.onboard, 12);
+  assert.equal(state.loadedThisCall, 2);
+  assert.equal(berthSnapshot(state).percentFull, 100);
+  assert.equal(state.queue, 5);
+  assert.equal(berthSnapshot(state).phase, "Vessel at capacity");
+});
+
+test("crane loading is frame-rate independent and can process accelerated replay", () => {
+  const vessel = { ...BERTH_VESSELS[1], initialStaged: 4 };
+  const whole = createBerthState(vessel), stepped = createBerthState(vessel);
+  advanceBerth(whole, 1000, [{ offsetSeconds: 250, units: 3 }]);
+  for (let time = 0; time < 1000; time += 10) advanceBerth(stepped, 10, time === 250 ? [{ offsetSeconds: 0, units: 3 }] : []);
+  assert.deepEqual(berthSnapshot(whole), berthSnapshot(stepped));
+  assert.equal(whole.loadedThisCall, 7);
+  const target = vesselPoint(vessel, -20, 0), pose = cranePose(vessel, { active: true, released: false, fraction: 0.55, phase: "Lowering" }, target);
+  assert.ok(Math.hypot(pose.hook[0] - target[0], pose.hook[1] - target[1]) < 0.001);
+  assert.equal(pose.carrying, true);
+  assert.deepEqual(vesselPoint(vessel, 0, 0), vessel.center);
+});
+
+test("cargo arriving exactly on a frame boundary is neither lost nor loaded early", () => {
+  const state = createBerthState({ ...BERTH_VESSELS[0], initialStaged: 0 });
+  advanceBerth(state, 10, [{ offsetSeconds: 10, units: 1 }]);
+  assert.equal(state.received, 1);
+  assert.equal(state.queue, 1);
+  assert.equal(state.loadedThisCall, 0);
+  advanceBerth(state, 60);
+  assert.equal(state.loadedThisCall, 1);
+  assert.equal(state.received, 1);
+});
+
+test("forklift handoff completion feeds its assigned ship once, including replay loops", () => {
+  const trip = (berth) => ({ slot: { dock: { id: berth, kind: "quay" } }, outbound: makePath([[0, 0], [100, 0]]), returnPath: makePath([[100, 0], [0, 0]]) });
+  const timeline = createReplayTimeline([trip("QUAY-W"), trip("QUAY-E")]);
+  assert.deepEqual(cargoDeliveryEvents(timeline, 0, 159), []);
+  assert.deepEqual(cargoDeliveryEvents(timeline, 0, 160), [{ berth: "QUAY-W", atSeconds: 160, units: 1 }]);
+  assert.deepEqual(cargoDeliveryEvents(timeline, 160, 320), [{ berth: "QUAY-E", atSeconds: 320, units: 1 }]);
+  assert.equal(cargoDeliveryEvents(timeline, 0, 640).length, 4);
+  assert.deepEqual(cargoDeliveryEvents(timeline, 160, 160), []);
+});
+import { buildScenarios, createRouter, lastWeek, replayTrip, makePath, positionOnPath, weeklyPaths, recentTrail, rollingBreadcrumbs, breadcrumbTimestamp, scheduleCongestion, ASSUMPTIONS, HISTORY_WINDOWS, HISTORY_PREROLL_SECONDS, createReplayTimeline, replayAtTime, movementHistory } from "./picking-model.js";
+
+test("heat history windows add nested movement samples from the same replay clock", () => {
+  const trips = [{ outbound: makePath([[0, 0], [4000, 0]]), returnPath: makePath([[4000, 0], [0, 0]]) }];
+  const timeline = createReplayTimeline(trips);
+  const clock = HISTORY_PREROLL_SECONDS + 47.25;
+  const windows = HISTORY_WINDOWS.map(({ seconds }) => movementHistory(timeline, clock, seconds));
+  assert.deepEqual(HISTORY_WINDOWS.map((window) => window.seconds), [1800, 3600, 7200, 43200]);
+  assert.deepEqual(windows.map((samples) => samples.length), [61, 121, 241, 1441]);
+  windows.forEach((samples, index) => {
+    assert.deepEqual(samples[0].point, replayAtTime(timeline, clock).point);
+    samples.forEach((sample) => assert.deepEqual(sample.point, replayAtTime(timeline, clock - sample.ageSeconds).point));
+    if (index) assert.deepEqual(samples.slice(0, windows[index - 1].length), windows[index - 1]);
+  });
+  assert.equal(movementHistory(timeline, 0, 43200).length, 1);
+  assert.equal(movementHistory(timeline, 45, 43200).length, 2);
+});
+
+test("movement heat follows congestion stops and reversing on the vehicle timeline", () => {
+  const trip = { outbound: makePath([[0, 0], [100, 0]]), returnPath: makePath([[100, 0], [0, 0]]),
+    congestionSeconds: 36, traffic: { atSeconds: 40, maneuverSeconds: 6, waitSeconds: 30, backup: 1.5, blockingForklift: "FL-02" } };
+  const timeline = createReplayTimeline([trip]);
+  const history = movementHistory(timeline, 60, 60, 5);
+  assert.match(history[0].status, /Waiting for FL-02/);
+  history.forEach((sample) => assert.deepEqual(sample.point, replayTrip(trip, 60 - sample.ageSeconds).point));
+  const reverse = replayAtTime(timeline, 41.5);
+  assert.ok(reverse.point[0] < replayAtTime(timeline, 40).point[0]);
+  assert.deepEqual(movementHistory(timeline, 41.5, 0)[0].point, reverse.point);
+});
 
 test("ArcGIS date fields receive integer timestamps despite fractional replay time", () => {
   const epoch = 1793991153319.7;
@@ -8,7 +90,17 @@ test("ArcGIS date fields receive integer timestamps despite fractional replay ti
   assert.ok(Number.isInteger(breadcrumbTimestamp(epoch, 30)));
   assert.equal(breadcrumbTimestamp(epoch, 0) - breadcrumbTimestamp(epoch, 1800), 1800000);
 });
-import { isLoadingDock, FORKLIFT_SIZE, REPLAY_SPEEDS, DEFAULT_REPLAY_SPEED, DEFAULT_HEAT_VISIBLE, TRAVEL_HEAT_RENDERER, QUAY_HANDOFFS } from "./picking.js";
+import { isLoadingDock, FORKLIFT_SIZE, REPLAY_SPEEDS, DEFAULT_REPLAY_SPEED, DEFAULT_HEAT_VISIBLE, TRAVEL_HEAT_RENDERER, QUAY_HANDOFFS, PICKING_LOADING_MESSAGE, loadingPercent } from "./picking.js";
+
+test("loading percentage cannot reach 100 before explicit readiness", () => {
+  assert.equal(PICKING_LOADING_MESSAGE, "Querying telemitry data and generating optimized routes");
+  const values = [loadingPercent("data", 0, 8), loadingPercent("data", 8, 8), loadingPercent("navigation", 1, 1), loadingPercent("planning", 1, 1), loadingPercent("layers", 1, 1)];
+  assert.ok(values.every((value, index) => value < 100 && (!index || value >= values[index - 1])));
+  assert.equal(loadingPercent("layers", 999, 1), 99);
+  assert.equal(loadingPercent("ready", 1, 1), 99);
+  assert.equal(loadingPercent("ready", 1, 1, true), 100);
+  assert.equal(loadingPercent("data", 0, 0), 0);
+});
 
 test("the yard has exactly two explicit land-side ship-loading destinations", () => {
   assert.deepEqual(QUAY_HANDOFFS.map((handoff) => handoff.id), ["QUAY-W", "QUAY-E"]);
@@ -31,7 +123,7 @@ test("replay speeds include the 400x race option", () => {
 test("forklift symbols are half their previous 34-unit size", () => {
   assert.equal(FORKLIFT_SIZE, 34 * 0.5);
 });
-import { createGridRouter } from "./picking-routing.js";
+import { createGridRouter, createCorridorRouter } from "./picking-routing.js";
 
 test("live Dock Door values and legacy Dock values are accepted", () => {
   const feature = (type, status = "Available", level = "EFY.B1.L1") => ({ attributes: { DOOR_TYPE: type, DEMO_STATUS: status, LEVEL_ID: level } });
@@ -89,6 +181,16 @@ test("rolling points cross trip boundaries without interpolating across water", 
 const docks = [{ id: "D1", facility: "A", level: "A.L1", point: [0, 0] }];
 const storage = Array.from({ length: 20 }, (_, index) => ({ id: `R${index}`, kind: "rack", facility: "A", level: "A.L1", point: [10 + index * 20, 10] }));
 const route = (start, end) => ({ ...makePath([start, [start[0], end[1]], end]), schematic: false });
+
+test("scenario progress reports completed work monotonically without changing results", () => {
+  const values = [], now = new Date("2026-11-10T12:00:00Z");
+  const reported = buildScenarios(storage, docks, route, now, { onProgress: (value) => values.push(value) });
+  assert.deepEqual(reported, buildScenarios(storage, docks, route, now));
+  assert.equal(values[0], 0);
+  assert.equal(values.at(-1), 1);
+  assert.ok(values.every((value, index) => value >= 0 && value <= 1 && (!index || value >= values[index - 1])));
+  assert.ok(values.some((value) => value > 0 && value < 0.6));
+});
 
 test("same weekly SKU demand and four forklifts, lower optimized travel", () => {
   const scenarios = buildScenarios(storage, docks, route, new Date("2026-11-06T13:00:00Z"));
@@ -203,6 +305,74 @@ test("dock openings allow wall passage without overriding land or storage obstac
   assert.equal(router.walkable([11, 3]), false);
   assert.equal(router.walkable([22, 10]), false);
   assert.equal(router.walkable([41, 10]), false);
+});
+
+test("scenario-specific corridor rules reuse safe land cells without opening obstacles", () => {
+  const land = { extent: { xmin: 0, ymin: 0, xmax: 40, ymax: 20 } };
+  const settings = { land: [land], areas: [land], obstacles: [], walls: [],
+    contains: (polygon, [x, y]) => x >= polygon.extent.xmin && x <= polygon.extent.xmax && y >= polygon.extent.ymin && y <= polygon.extent.ymax,
+    findPath: (matrix, first, last) => [first, last] };
+  const optimized = createGridRouter(settings);
+  const progress = [];
+  const current = createGridRouter({ ...settings, preparedMatrix: optimized.matrix, blockedPaths: [[[20, 0], [20, 20]]], blockedRadius: 2, onProgress: (completed, total) => progress.push({ completed, total }) });
+  assert.equal(optimized.walkable([20, 10]), true);
+  assert.equal(current.walkable([20, 10]), false);
+  assert.equal(current([5, 10], [35, 10]), null);
+  assert.ok(optimized([5, 10], [35, 10]));
+  assert.equal(optimized.walkable([45, 10]), false);
+  assert.equal(current.matrix[8][16], 1);
+  assert.equal(optimized.matrix[8][16], 0);
+  assert.equal(progress[0].completed, 0);
+  assert.equal(progress.at(-1).completed, progress.at(-1).total);
+  assert.ok(progress.every((step, index) => step.completed <= step.total && (!index || step.completed >= progress[index - 1].completed)));
+});
+
+test("optimized corridor routing joins only validated legs and retains route-derived distance", () => {
+  const open = (start, end) => ({ ...makePath([start, end]), schematic: false });
+  const outer = (start, end) => ({ ...makePath([start, [start[0], 50], [end[0], 50], end]), schematic: false });
+  const optimized = createCorridorRouter(open, outer, [[10, 0], [20, 0], [30, 0]]);
+  const path = optimized([0, 0], [40, 0]);
+  assert.equal(path.usesCentralCorridor, true);
+  assert.equal(path.length, 40);
+  assert.ok(path.length < outer([0, 0], [40, 0]).length);
+  const unavailable = createCorridorRouter((start, end) => end[0] === 20 ? null : open(start, end), outer, [[10, 0], [20, 0], [30, 0]]);
+  assert.equal(unavailable([0, 0], [40, 0]).usesCentralCorridor, undefined);
+});
+
+test("scenario route planners change actual trips, not just displayed metrics", () => {
+  const quays = [{ id: "QW", kind: "quay", point: [0, 0] }, { id: "QE", kind: "quay", point: [500, 0] }];
+  const outer = (start, end) => ({ ...makePath([start, [start[0], 100], [end[0], 100], end]), schematic: false });
+  const { current, optimized } = buildScenarios(storage, quays, outer, new Date(), { optimizedRoute: route });
+  assert.equal(current.total.picks, optimized.total.picks);
+  assert.ok(optimized.total.distance < current.total.distance * 0.8);
+  assert.ok(optimized.fleet.every((forklift) => forklift.trips.every((trip) => trip.returnPath.points.every((point) => point[1] !== 100))));
+  assert.ok(current.fleet.some((forklift) => forklift.trips.some((trip) => trip.returnPath.points.some((point) => point[1] === 100))));
+});
+
+test("cargo keeps its assigned quay when optimized storage is relocated", () => {
+  const quays = [{ id: "QW", kind: "quay", point: [0, 0] }, { id: "QE", kind: "quay", point: [500, 0] }];
+  const { current, optimized } = buildScenarios(storage, quays, route, new Date(), { fixedQuayAssignments: true });
+  const manifest = (scenario) => scenario.placements.map((slot) => [slot.sku, slot.quayId, slot.weekly]).sort();
+  assert.deepEqual(manifest(current), manifest(optimized));
+  for (const scenario of [current, optimized]) for (const forklift of scenario.fleet) for (const trip of forklift.trips) {
+    assert.equal(trip.slot.dock.id, trip.slot.quayId);
+    assert.deepEqual(trip.returnPath.points.at(-1), quays.find((quay) => quay.id === trip.slot.quayId).point);
+  }
+  assert.ok(optimized.total.distance < current.total.distance * 0.8);
+});
+
+test("optimized central picking cell spreads west-bound fast movers into a dedicated corridor zone", () => {
+  const slots = Array.from({ length: 60 }, (_, index) => ({ id: `R${index}`, kind: "rack", facility: index >= 20 && index < 40 ? "CENTRAL" : "OTHER", level: "L1", point: [10 + index * 6, 10] }));
+  const quays = [{ id: "QW", kind: "quay", point: [0, 0] }, { id: "QE", kind: "quay", point: [500, 0] }];
+  const { current, optimized } = buildScenarios(slots, quays, route, new Date(), { fixedQuayAssignments: true, centralPickingFacilities: ["CENTRAL"] });
+  const centralHigh = optimized.placements.filter((slot) => slot.facility === "CENTRAL" && slot.frequency === "High" && slot.quayId === "QW");
+  assert.ok(centralHigh.length > 0);
+  assert.equal(optimized.fleet[2].role, "Central-corridor picking");
+  assert.ok(optimized.fleet[2].trips.every((trip) => trip.slot.facility === "CENTRAL"));
+  assert.ok(centralHigh.every((slot) => optimized.fleet[2].trips.some((trip) => trip.slot.id === slot.id)));
+  assert.ok(optimized.fleet[3].trips.every((trip) => trip.slot.facility !== "CENTRAL"));
+  assert.ok(optimized.fleet[3].trips.length > 0);
+  assert.equal(current.total.picks, optimized.total.picks);
 });
 
 test("successive trips and the replay loop join at docks without teleporting", () => {

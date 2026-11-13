@@ -18,18 +18,18 @@ const BASE = ["sites", "zones", "rails"];
 export const VIEWS = [
   {
     id: "current-picking", title: "current pick pattern", icon: "car", picking: "current",
-    desc: "Warehouse to quay · shared-aisle delays",
+    desc: "Shared outer route · queues and detours",
     layers: [...BASE, ...INDOOR, "doors", "racks", "slots", "stalls"], target: { site: true }, floor: null,
         notes: ["Warehouse containers are delivered to one of the two marked land-side ship-loading handoffs.",
-          "Shared order batches and scattered cargo cause queues and extra travel. Forklifts stop on the dock; crane operations are not animated."]
+            "Shared outer-road dispatch and scattered cargo cause queues and extra travel. The central corridor is not enabled in this baseline plan. Forklifts stop on the dock."]
   },
   {
     id: "optimized-picking", title: "optimized pick pattern", icon: "lightbulb", picking: "optimized",
-    desc: "Warehouse to quay · efficient dispatch",
+    desc: "Central corridor · shorter zoned routes",
     layers: [...BASE, ...INDOOR, "doors", "racks", "slots", "stalls"], target: { site: true }, floor: null,
         notes: ["Same four forklifts and the same two quayside destinations; the optimized workload assumes 5% more container moves.",
-          "Cargo placement and zoned dispatch reduce warehouse-to-quay travel and aisle contention; FL-04 still collects farther warehouse stock.",
-          "Loaded trips go directly to the land-side handoff. No forklift drives onto a ship, and no crane is animated."]
+            "The proposed plan enables the central corridor between Warehouses C and E. FL-03 serves a central Warehouse E picking zone; FL-04 still collects farther warehouse stock.",
+          "Loaded trips go directly to the land-side handoff. Forklifts remain on land; berth cranes transfer cargo onto stationary simulated ships."]
   },
   {
     id: "campus", title: "Campus overview", icon: "globe",
@@ -148,6 +148,11 @@ export async function initViews({ view, floorFilterEl, listEl, notesEl, picking 
   });
   // snapshot of the web map's own state, so "default" can restore it
   const snap = new Map(flayers.map((l) => [l, { visible: l.visible, def: l.definitionExpression || "" }]));
+  const groups = view.map.allLayers.filter((layer) => layer.type === "group").toArray();
+  const groupSnap = new Map(groups.map((layer) => [layer, layer.visible]));
+  const initialViewpoint = view.viewpoint.clone();
+  const initialFloors = view.floors?.toArray().slice() || [];
+  const initialFloorFilter = floorFilterEl ? { facility: floorFilterEl.facility || null, level: floorFilterEl.level || null } : null;
   const layersOf = (c) => flayers.filter((l) => cat.get(l) === c);
   console.info("[views] layer categories:", flayers.map((l) => `${l.title} → ${cat.get(l)}`).join(" | "));
 
@@ -225,6 +230,33 @@ export async function initViews({ view, floorFilterEl, listEl, notesEl, picking 
     notesEl.innerHTML = `<div class="notes-title">${v.title}</div><ul>${v.notes.map((n) => `<li>${n}</li>`).join("")}</ul>`;
   }
 
+  async function reset() {
+    hl?.remove(); hl = null;
+    activeId = null;
+    view.closePopup?.();
+    flayers.forEach((layer) => {
+      const state = snap.get(layer);
+      setVisible(layer, state.visible);
+      layer.definitionExpression = state.def;
+    });
+    groups.forEach((layer) => { layer.visible = groupSnap.get(layer); });
+    try {
+      if (floorFilterEl && initialFloorFilter) {
+        floorFilterEl.facility = initialFloorFilter.facility;
+        floorFilterEl.level = initialFloorFilter.level;
+      }
+      view.floors?.removeAll();
+      initialFloors.forEach((floor) => view.floors?.add(floor));
+    } catch (error) { console.warn("[views] initial floor restore", error); }
+    picking?.setActive(null);
+    document.querySelectorAll("#leftPanel calcite-panel[data-panel]").forEach((panel) => { panel.hidden = panel.dataset.panel !== "overview"; });
+    document.querySelectorAll("#actionBar calcite-action[data-panel]").forEach((action) => { action.active = action.dataset.panel === "overview"; });
+    renderList();
+    notesEl.innerHTML = `<div class="muted">Pick a view, or press 1–9. Talking points appear here.</div>`;
+    try { await view.goTo(initialViewpoint.clone(), { duration: 500 }); }
+    catch (error) { console.warn("[views] initial camera restore", error); }
+  }
+
   function renderList() {
     listEl.innerHTML = "";
     VIEWS.forEach((v, i) => {
@@ -250,5 +282,5 @@ export async function initViews({ view, floorFilterEl, listEl, notesEl, picking 
 
   renderList();
   notesEl.innerHTML = `<div class="muted">Pick a view, or press 1–9. Talking points appear here.</div>`;
-  return { apply, VIEWS };
+  return { apply, reset, VIEWS };
 }

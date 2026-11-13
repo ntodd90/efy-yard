@@ -881,22 +881,30 @@ const picking = {
 };
 $("pickingMetrics").textContent = "Preparing simulated picking scenarios...";
 try {
-  const { initViews } = await import("./views.js?v=20261110-quayside-v10");
-  await initViews({
+  const { initViews } = await import("./views.js?v=20261113-reset-view-v22");
+  const views = await initViews({
     view,
     floorFilterEl: document.querySelector("arcgis-floor-filter"),
     listEl: $("viewList"),
     notesEl: $("viewNotes"),
     picking
   });
+  $("resetViewBtn").addEventListener("click", async () => {
+    state.doorFilter = "all";
+    $("doorFilter").value = "all";
+    renderDoors();
+    pickingController?.reset();
+    await views.reset();
+  });
 } catch (e) {
   showError("Quick views failed to load.", e);
 }
 void (async () => {
   try {
-    const { initPicking } = await import("./picking.js?v=20261110-quayside-v10");
+    const { initPicking } = await import("./picking.js?v=20261113-reset-view-v21");
     pickingController = await initPicking({ view, metricsEl: $("pickingMetrics"), trafficLayer });
     pickingController.setActive(activePicking);
+    await pickingController.completeLoading();
   } catch (e) {
     console.warn("Picking scenarios unavailable.", e);
     $("pickingMetrics").textContent = "Picking scenarios unavailable: " + (e.message || "Storage or dock data could not be loaded.");

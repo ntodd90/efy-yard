@@ -1,4 +1,4 @@
-import { makePath } from "./picking-model.js?v=20261110-quayside-v10";
+import { makePath } from "./picking-model.js?v=20261110-loading-v15";
 
 function distanceToSegment(point, start, end) {
   const dx = end[0] - start[0], dy = end[1] - start[1];
@@ -21,7 +21,9 @@ function spatialIndex(items, size = 24) {
   return (point) => buckets.get(`${Math.floor(point[0] / size)},${Math.floor(point[1] / size)}`) || [];
 }
 
-export function createGridRouter({ land, areas, obstacles, walls, facilities = [], portals = [], contains, findPath, cellSize = 1.25 }) {
+export const CENTRAL_CORRIDOR = [[88145, 433121], [88240, 433087], [88335, 433052]];
+
+export function createGridRouter({ land, areas, obstacles, walls, facilities = [], portals = [], contains, findPath, cellSize = 1.25, preparedMatrix = null, blockedPaths = [], blockedRadius = 6, blockedOutsideFacilities = false, onProgress = () => {} }) {
   if (!land.length || !areas.length) throw new Error("Mapped land and forklift-accessible areas are required for routing.");
   const bounds = land.reduce((extent, polygon) => ({
     xmin: Math.min(extent.xmin, polygon.extent.xmin), ymin: Math.min(extent.ymin, polygon.extent.ymin),
@@ -30,16 +32,40 @@ export function createGridRouter({ land, areas, obstacles, walls, facilities = [
   const columns = Math.ceil((bounds.xmax - bounds.xmin) / cellSize), rows = Math.ceil((bounds.ymax - bounds.ymin) / cellSize);
   if (columns * rows > 700000) throw new Error("Mapped yard is too large for the forklift navigation grid.");
   const areasAt = spatialIndex(areas), obstaclesAt = spatialIndex(obstacles), wallsAt = spatialIndex(walls), facilitiesAt = spatialIndex(facilities);
-  const walkable = (point) => land.some((polygon) => contains(polygon, point))
+  const blockedAt = (point) => (!blockedOutsideFacilities || !facilitiesAt(point).some((polygon) => contains(polygon, point)))
+    && blockedPaths.some((path) => path.slice(1).some((end, index) => distanceToSegment(point, path[index], end) <= blockedRadius));
+  const walkable = (point) => !blockedAt(point) && land.some((polygon) => contains(polygon, point))
     && (areasAt(point).some((polygon) => contains(polygon, point)) || (facilities.length && !facilitiesAt(point).some((polygon) => contains(polygon, point))))
     && !obstaclesAt(point).some((polygon) => contains(polygon, point) || polygon.rings?.some((ring) => ring.slice(1).some((end, index) => distanceToSegment(point, ring[index], end) < 0.65)))
     && (!wallsAt(point).some((wall) => wall.paths.some((path) => path.slice(1).some((end, index) => distanceToSegment(point, path[index], end) < 1.15)))
       || portals.some((portal) => Math.hypot(point[0] - portal[0], point[1] - portal[1]) < 3.5));
   const pointFor = (column, row) => [bounds.xmin + (column + 0.5) * cellSize, bounds.ymin + (row + 0.5) * cellSize];
-  const matrix = Array.from({ length: rows }, (_, row) => Array.from({ length: columns }, (_, column) => {
-    const point = pointFor(column, row);
-    return walkable(point) && [-0.5, 0.5].every((dx) => [-0.5, 0.5].every((dy) => land.some((polygon) => contains(polygon, [point[0] + dx * cellSize, point[1] + dy * cellSize])))) ? 0 : 1;
+  if (preparedMatrix && (preparedMatrix.length !== rows || preparedMatrix.some((row) => row.length !== columns))) throw new Error("Navigation matrix does not match the yard bounds.");
+  const blockedRegions = blockedPaths.map((path) => ({
+    minColumn: Math.max(0, Math.floor((Math.min(...path.map((point) => point[0])) - blockedRadius - bounds.xmin) / cellSize)),
+    maxColumn: Math.min(columns - 1, Math.ceil((Math.max(...path.map((point) => point[0])) + blockedRadius - bounds.xmin) / cellSize)),
+    minRow: Math.max(0, Math.floor((Math.min(...path.map((point) => point[1])) - blockedRadius - bounds.ymin) / cellSize)),
+    maxRow: Math.min(rows - 1, Math.ceil((Math.max(...path.map((point) => point[1])) + blockedRadius - bounds.ymin) / cellSize))
   }));
+  const totalRows = rows + blockedRegions.reduce((total, region) => total + Math.max(0, region.maxRow - region.minRow + 1), 0);
+  let completedRows = 0;
+  const rowComplete = () => { completedRows++; if (completedRows % 16 === 0 && completedRows < totalRows) onProgress(completedRows, totalRows); };
+  onProgress(0, totalRows);
+  const matrix = Array.from({ length: rows }, (_, row) => {
+    const result = preparedMatrix ? preparedMatrix[row].slice() : Array.from({ length: columns }, (_, column) => {
+      const point = pointFor(column, row);
+      return walkable(point) && [-0.5, 0.5].every((dx) => [-0.5, 0.5].every((dy) => land.some((polygon) => contains(polygon, [point[0] + dx * cellSize, point[1] + dy * cellSize])))) ? 0 : 1;
+    });
+    rowComplete();
+    return result;
+  });
+  blockedRegions.forEach(({ minRow, maxRow, minColumn, maxColumn }) => {
+    for (let row = minRow; row <= maxRow; row++) {
+      for (let column = minColumn; column <= maxColumn; column++) if (blockedAt(pointFor(column, row))) matrix[row][column] = 1;
+      rowComplete();
+    }
+  });
+  onProgress(completedRows, totalRows);
   const snapCache = new Map(), routeCache = new Map();
   const snap = (point) => {
     const key = point.join(",");
@@ -91,4 +117,31 @@ export function createGridRouter({ land, areas, obstacles, walls, facilities = [
   route.matrix = matrix;
   route.pointFor = pointFor;
   return route;
+}
+
+export function createCorridorRouter(openRoute, outerRoute, corridor = CENTRAL_CORRIDOR) {
+  const nearest = (point) => corridor.reduce((best, candidate, index) => Math.hypot(point[0] - candidate[0], point[1] - candidate[1])
+    < Math.hypot(point[0] - corridor[best][0], point[1] - corridor[best][1]) ? index : best, 0);
+  const cache = new Map();
+  return (start, end) => {
+    const key = `${start.join(",")}:${end.join(",")}`;
+    if (cache.has(key)) return cache.get(key);
+    const first = nearest(start), last = nearest(end);
+    let result = null;
+    if (first !== last) {
+      const step = first < last ? 1 : -1;
+      const waypoints = [start];
+      for (let index = first; index !== last + step; index += step) waypoints.push(corridor[index]);
+      waypoints.push(end);
+      const legs = waypoints.slice(1).map((point, index) => openRoute(waypoints[index], point));
+      if (legs.every(Boolean)) {
+        const path = makePath(legs.flatMap((leg, index) => index ? leg.points.slice(1) : leg.points));
+        const outer = outerRoute(start, end);
+        if (outer && path.length <= outer.length * 1.05) result = { ...path, schematic: false, usesCentralCorridor: true };
+      }
+    }
+    if (!result) result = openRoute(start, end);
+    cache.set(key, result);
+    return result;
+  };
 }

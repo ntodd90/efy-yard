@@ -9,20 +9,48 @@ The current workflow is **warehouse to ship-loading quay**, not delivery to
 warehouse doors. `QUAY-W` and `QUAY-E` are two explicit land-side handoffs on the
 southern quay, corresponding to the supplied ship-loading image. Yellow squares
 and labels mark them on the map. Every loaded trip runs directly from a warehouse
-storage position to one handoff; the forklift stops on the dock. Crane lifting and
-ship loading are deliberately not animated yet. Warehouse doors are routing
+storage position to one handoff; the forklift stops on the dock. A berth crane then
+transfers the container to its stationary cargo ship. Warehouse doors are routing
 access points only. Trailer parking is not used as a warehouse cargo source.
+
+## Cargo Ships and Cranes
+
+Two additional independent GraphicsLayers provide **Cargo ships (Simulated)** and
+**Quayside cranes (Simulated)**. Original CAD-style polygon drawings depict fixed,
+map-scale coastal cargo vessels at the two berths, with hulls, hatch areas,
+superstructures, lifeboats, mooring lines and indicative container stacks. These are
+representative 2D drawings, not surveyed CAD or the specifications of the vessels
+visible in aerial imagery. Hulls stay fixed; crane booms, spreaders and suspended
+containers move on the same simulation clock as the forklifts.
+
+Each completed forklift handoff adds one 20-foot container (1 TEU) to that berth's
+queue. Two containers are initially staged at each berth so an initial loading cycle
+can start immediately. A ship's onboard cargo increases only when the crane places
+its suspended container on deck, not when cargo merely arrives. Loading stops at
+100%; excess arrivals remain queued. Scenario switching preserves separate berth
+states, pause/speed controls apply to cranes, and Restart resets that scenario's call.
+
+Ship and crane popups include a live capacity meter, TEU onboard/available,
+containers loaded this call, quayside queue, achieved lifts/hour, estimated cargo
+mass, length/beam, modeled draft, design deadweight, crane outreach/lift rating and
+nominal cycle, vessel class, demo registry/call sign, and service. All vessel and
+loading values are illustrative; no live AIS, stability calculation or approved
+stowage plan is implied. Vessel capacities are 360/240 TEU with 90/80-second crane
+cycles and 12 t per simulated container. No hosted data is edited.
 
 Quick Views includes **current pick pattern** and **optimized pick pattern** (keys 1 and 2).
 Each has its own four moving forklifts and a travel heatmap built from point breadcrumbs.
 Breadcrumbs are point FeatureLayers with forklift IDs and date-valued timestamps.
 Travel heat is off by default; the button beside the forklift filter toggles it quickly.
-Replay starts at 1x. When enabled, the heatmap shows relative routed sample density
-within a rolling 30-minute simulation window, sampled every 30
-simulated seconds. Samples follow the routed positions, including stops; repeated
-stationary samples are omitted. Replay speed controls the simulation clock.
-The forklift selector filters individual trails, and dated history shows a 30-minute
-window ending at that day's final synthetic event. Weekly metrics use all served trips.
+Replay starts at 1x. History options are rolling **30 min, 1 hour, 2 hour and 12 hour**
+windows, sampled every 30 simulated seconds. Vehicles and heat use the same cumulative
+trip timeline, including warehouse pickups, quay deliveries, queues and reversing.
+Stationary samples are retained so waiting areas accumulate density. Larger windows
+include all shorter-window samples plus older history, with a fixed renderer density
+scale. Replay begins after a matching 12-hour simulated pre-roll, so historical
+movement is available immediately; no end-of-week history is invented before the
+replay start. Replay speed controls that shared simulation clock. The forklift
+selector filters both vehicles and their heat samples. Weekly metrics use all served trips.
 Two supporting storage overlays show high-frequency picks in yellow, medium in mint,
 and low in dark blue-gray. Ordinary views restore the web map's original styling.
 
@@ -46,6 +74,29 @@ Three forklifts have zoned picking assignments; FL-04
 serves the farthest quarter of reachable racks, including its initial replay trip.
 Empty travel from the previous quay handoff to the next warehouse pickup is
 included in travel totals, along with the direct loaded trip back to the quay.
+
+The routing plans now differ operationally, not just in storage colors. The current
+baseline uses the shared outer network and does not enable the central link between
+Warehouses C and E. The proposed optimized plan enables that link and uses validated
+corridor legs when shorter, or within 5% of the outer-route distance to spread traffic.
+Its placement and dispatch costs use those actual optimized routes. The two grids
+share the same land/obstacle mask; a corridor access rule never creates walkable cells
+inside water, racks, parked trailers or walls. Only warehouse positions reachable in
+both plans participate in the comparison. The sidebar reports routing policy and
+central-corridor trip counts. Enabling this proposed corridor requires operational
+approval; the results are modeled, not a measured infrastructure improvement.
+
+A synthetic manifest assigns each cargo group to a fixed quay before either plan is
+built. That destination is held constant when optimized stock is relocated. The
+current plan stores cargo wherever space is available; the optimized plan positions
+cargo nearer its required quay while spreading busy aisles. Savings therefore do
+not come from quietly changing a cargo group's ship-loading destination. This
+manifest is generated demo data, not an uploaded vessel cargo manifest.
+
+The optimized plan reserves a share of west-bound fast movers in a central Warehouse E
+picking cell, relieving the busiest west-side aisles. FL-03 serves that zone and its
+central-corridor route; FL-04 retains farther-rack work outside the central cell.
+This is a proposed storage/dispatch layout, not a cosmetic change to the heat layer.
 Unreachable storage stays colored on the map but is excluded from both scenarios'
 travel totals. Optimization preserves the served workload and does not relocate
 reachable demand into unreachable storage. The optional optimized uplift adds work
@@ -90,6 +141,14 @@ selected. Worker or CDN failures leave the yard map usable and report the pickin
 error instead of blocking application startup. Each browser requires its own ArcGIS
 sign-in. Use the registered local URL exactly: http://127.0.0.1:5500/index.html.
 
+The compact pixel-style loading bar is work-driven, not timer-driven.
+Its weighted phases count completed layer queries, navigation rows, route/scenario
+construction and layer initialization. It stays below 100% until both scenarios'
+sources are loaded and the active scenario's map layer views are ready. The 100%
+frame appears as the ready controls replace loading, then fades out; errors never
+report successful completion. The percentage is completed preparation work, not an
+estimate of remaining seconds.
+
 ## Verification
 
 Run the focused model tests with Node.js:
@@ -99,3 +158,8 @@ node --test picking.test.js
 ```
 
 The app itself remains static and CDN-based, with no npm dependencies or build step.
+
+The **Yard Overview** heading button restores the initial web-map camera, layer and
+group visibility, feature filters, floor selection, and overview panel. It also clears
+active quick-view highlighting and popups, resets the dock-door filter, forklift
+simulation, travel heat, ship loading, and replay speed.

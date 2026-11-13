@@ -21,6 +21,7 @@ calcite-navigation-logo {
         --calcite-navigation-logo-text-color: #c5d6ce;
 }
 calcite-panel::part(heading) { font-family: "Barlow Condensed", sans-serif; font-size: 23px; font-weight: 700; }
+#resetViewBtn::part(button) { justify-content: flex-start; min-height: 0; padding: 0; font-family: "Barlow Condensed", sans-serif; font-size: 23px; font-weight: 700; }
 
 /* ---------- boot screen ---------- */
 #boot { position: fixed; inset: 0; z-index: 999; display: flex; align-items: center; justify-content: center;
@@ -91,6 +92,12 @@ calcite-panel::part(heading) { font-family: "Barlow Condensed", sans-serif; font
 .notes li { margin: 3px 0; }
 
 .picking-metrics { margin-top: 16px; border-top: 1px solid #d7ddd1; padding-top: 12px; }
+.picking-loader { margin-bottom: 12px; }
+.picking-loading-message { color: #536760; font-size: 12px; line-height: 1.5; margin-bottom: 8px; overflow-wrap: anywhere; }
+.picking-loading-game { max-width: 280px; border: 2px solid #18332e; padding: 6px; background: #153a35; box-shadow: inset 0 0 0 2px #536760; }
+.picking-loading-meter { height: 12px; margin: 5px 0; border: 2px solid #c5d6ce; background: #0b1f1a; overflow: hidden; }
+.picking-loading-meter > div { height: 100%; width: 0; background: repeating-linear-gradient(90deg, #d9ed4d 0, #d9ed4d 8px, #153a35 8px, #153a35 10px); }
+.picking-loading-caption { display: flex; justify-content: space-between; gap: 8px; color: #fffef8; font: 700 11px/1.5 "Courier New", monospace; }
 .pad:has(#pickingMetrics:not([hidden])) #viewList { display: block; max-height: 200px; overflow-y: auto; }
 .picking-heading, .picking-vehicle-title { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .picking-heading { flex-wrap: wrap; margin-bottom: 4px; }
@@ -111,6 +118,19 @@ calcite-panel::part(heading) { font-family: "Barlow Condensed", sans-serif; font
 .picking-legend { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; }
 .picking-legend i { display: inline-block; width: 10px; height: 10px; margin-right: 4px; border-radius: 2px; }
 .picking-disclaimer { font-size: 11px; line-height: 1.5; color: #536760; }
+.ship-loading-popup { font-family: "IBM Plex Sans", sans-serif; min-width: 220px; max-width: 340px; color: #18332e; }
+.ship-popup-vessel { margin: 0 0 6px; font-family: "Barlow Condensed", sans-serif; font-size: 22px; line-height: 1.15; }
+.ship-popup-heading { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
+.ship-popup-heading strong { color: #9a3d27; font-size: 10px; }
+.ship-popup-fill { display: flex; align-items: baseline; gap: 8px; margin-top: 8px; }
+.ship-popup-fill strong { font-family: "Barlow Condensed", sans-serif; font-size: 30px; line-height: 1.1; }
+.ship-popup-fill span { font-size: 12px; color: #536760; }
+.ship-loading-popup progress { display: block; width: 100%; height: 12px; margin-top: 5px; accent-color: #087b70; }
+.ship-popup-status { margin: 8px 0; font-size: 12px; font-weight: 600; color: #087b70; }
+.ship-loading-popup dl { margin: 8px 0; font-size: 12px; }
+.ship-loading-popup dl > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 8px; padding: 5px 0; border-bottom: 1px solid #d7ddd1; }
+.ship-loading-popup dd { margin: 0; text-align: right; font-weight: 600; overflow-wrap: anywhere; }
+.ship-popup-note { margin: 10px 0 0; font-size: 10px; line-height: 1.5; color: #536760; }
 @media (max-width: 720px) {
         #leftPanel { --calcite-shell-panel-width: min(340px, calc(100vw - 74px)); --calcite-shell-panel-max-width: min(340px, calc(100vw - 74px)); }
         .picking-metrics .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }

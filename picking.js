@@ -1,9 +1,43 @@
-import { ASSUMPTIONS, FREQUENCIES, replayTrip, rollingBreadcrumbs, breadcrumbTimestamp } from "./picking-model.js?v=20261110-quayside-v10";
+import { ASSUMPTIONS, FREQUENCIES, breadcrumbTimestamp, HISTORY_WINDOWS, HEAT_SAMPLE_SECONDS, HISTORY_PREROLL_SECONDS, createReplayTimeline, replayAtTime, movementHistory } from "./picking-model.js?v=20261110-loading-v15";
+import { initShipping } from "./shipping.js?v=20261110-shipping-v19";
 
 export const FORKLIFT_SIZE = 17;
 export const REPLAY_SPEEDS = [1, 6, 20, 400];
 export const DEFAULT_REPLAY_SPEED = 1;
 export const DEFAULT_HEAT_VISIBLE = false;
+export const PICKING_LOADING_MESSAGE = "Querying telemitry data and generating optimized routes";
+
+export function loadingPercent(phase, completed, total, ready = false) {
+  if (ready) return 100;
+  const ranges = { data: [0, 12], navigation: [12, 23], planning: [35, 50], layers: [85, 14], ready: [99, 0] };
+  const [start, span] = ranges[phase] || [0, 0];
+  const fraction = total > 0 && Number.isFinite(completed) ? Math.max(0, Math.min(1, completed / total)) : 0;
+  return Math.min(99, Math.floor(start + span * fraction));
+}
+
+export function createPickingLoader(container) {
+  const element = document.createElement("div");
+  element.className = "picking-loader";
+  element.dataset.percent = "0";
+  element.innerHTML = `<div class="picking-loading-message" role="status">${PICKING_LOADING_MESSAGE}</div>
+    <div class="picking-loading-game">
+    <div class="picking-loading-meter" role="progressbar" aria-label="Scenario preparation" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div></div></div>
+    <div class="picking-loading-caption"><span>LOADING</span><strong>0%</strong></div></div>`;
+  container.replaceChildren(element);
+  const bar = element.querySelector('[role="progressbar"]'), fill = bar.firstElementChild, label = element.querySelector("strong");
+  let percent = 0;
+  return {
+    element,
+    update(phase, completed, total, ready = false) {
+      percent = Math.max(percent, loadingPercent(phase, completed, total, ready));
+      element.dataset.percent = String(percent);
+      bar.setAttribute("aria-valuenow", String(percent));
+      fill.style.width = `${percent}%`;
+      label.textContent = `${percent}%`;
+      return percent;
+    }
+  };
+}
 export const QUAY_HANDOFFS = [
   { id: "QUAY-W", kind: "quay", name: "West ship-loading handoff", point: [87745, 433168] },
   { id: "QUAY-E", kind: "quay", name: "East ship-loading handoff", point: [88620, 432861] }
@@ -96,11 +130,13 @@ export function isLoadingDock(feature) {
 }
 
 export async function initPicking({ view, metricsEl, trafficLayer }) {
-  metricsEl.innerHTML = '<div class="muted">Loading simulated picking scenarios...</div>';
-  const [GraphicsLayer, Graphic, FeatureLayer] = await $arcgis.import(["@arcgis/core/layers/GraphicsLayer.js", "@arcgis/core/Graphic.js", "@arcgis/core/layers/FeatureLayer.js"]);
+  const loader = createPickingLoader(metricsEl);
+  const [GraphicsLayer, Graphic, FeatureLayer, reactiveUtils] = await $arcgis.import(["@arcgis/core/layers/GraphicsLayer.js", "@arcgis/core/Graphic.js", "@arcgis/core/layers/FeatureLayer.js", "@arcgis/core/core/reactiveUtils.js"]);
   const sourceLayers = view.map.allLayers.toArray();
   const find = (title) => sourceLayers.find((layer) => layer.title === title);
-  const [racks, stalls, doors] = await Promise.all([queryFeatures(find("Racks")), queryFeatures(find("TrailerStalls")), queryFeatures(find("DockDoors"))]);
+  let queriesCompleted = 0;
+  const fetchLayer = async (title) => { const features = await queryFeatures(find(title)); loader.update("data", ++queriesCompleted, 8); return features; };
+  const [racks, stalls, doors] = await Promise.all([fetchLayer("Racks"), fetchLayer("TrailerStalls"), fetchLayer("DockDoors")]);
   const storage = racks.filter((feature) => /\.L1$/.test(feature.attributes.LEVEL_ID || "")).map((feature) => ({
     id: feature.attributes.RACK_ID, kind: "rack", facility: feature.attributes.FACILITY_ID, level: feature.attributes.LEVEL_ID,
     aisle: feature.attributes.AISLE, zone: feature.attributes.ZONE,
@@ -110,7 +146,7 @@ export async function initPicking({ view, metricsEl, trafficLayer }) {
     id: feature.attributes.DOOR_ID, facility: feature.attributes.FACILITY_ID, level: feature.attributes.LEVEL_ID, point: coordinate(feature.geometry)
   })).filter((dock) => dock.point);
   const loading = QUAY_HANDOFFS.map((handoff) => ({ ...handoff, point: [...handoff.point] }));
-  const [sites, zones, units, details, facilities] = await Promise.all([queryFeatures(find("Sites")), queryFeatures(find("YardZones")), queryFeatures(find("Units")), queryFeatures(find("Details")), queryFeatures(find("Facilities"))]);
+  const [sites, zones, units, details, facilities] = await Promise.all([fetchLayer("Sites"), fetchLayer("YardZones"), fetchLayer("Units"), fetchLayer("Details"), fetchLayer("Facilities")]);
   const areas = [
     ...zones.filter((feature) => ["Roadway", "Trailer Parking", "Equipment Pool"].includes(feature.attributes.ZONE_TYPE)),
     ...units.filter((feature) => /\.L1$/.test(feature.attributes.LEVEL_ID || "") && /Storage|Staging|Dock|Picking|Shipping|Receiving|Cross|Circulation|Corridor|Warehouse|Packing/i.test(feature.attributes.USE_TYPE || ""))
@@ -118,11 +154,11 @@ export async function initPicking({ view, metricsEl, trafficLayer }) {
   const validStorage = storage.filter((slot) => slot.id && slot.point);
   const serialize = (geometry) => ({ ...geometry.toJSON(), extent: geometry.extent.toJSON() });
   const scenarios = await new Promise((resolve, reject) => {
-    const worker = new Worker(new URL("./picking-worker.js?v=20261110-quayside-v10", import.meta.url), { type: "module" });
+    const worker = new Worker(new URL("./picking-worker.js?v=20261110-loading-v15", import.meta.url), { type: "module" });
     const timer = setTimeout(() => { worker.terminate(); reject(new Error("Picking calculation timed out. The yard map remains available.")); }, 120000);
     const finish = () => { clearTimeout(timer); worker.terminate(); };
     worker.onmessage = ({ data }) => {
-      if (data.progress) { metricsEl.textContent = data.progress; return; }
+      if (data.progress) { loader.update(data.progress.phase, data.progress.completed, data.progress.total); return; }
       finish();
       if (data.error) reject(new Error(data.error)); else resolve(data.scenarios);
     };
@@ -137,11 +173,13 @@ export async function initPicking({ view, metricsEl, trafficLayer }) {
     });
   });
   const geometries = new Map(validStorage.map((slot) => [slot.id, slot.geometry]));
+  let layerWork = 0;
+  loader.update("layers", 0, 12);
   Object.values(scenarios).forEach((scenario) => scenario.placements.forEach((slot) => { slot.geometry = geometries.get(slot.id); }));
   const handoffs = new GraphicsLayer({ title: "Ship-loading handoffs (quayside)", visible: false });
   loading.forEach((handoff) => {
     const geometry = { type: "point", x: handoff.point[0], y: handoff.point[1], spatialReference };
-    handoffs.add(new Graphic({ geometry, attributes: { name: handoff.name, destination: "Dock-side container staging; forklift stops here. Crane loading is not animated." },
+    handoffs.add(new Graphic({ geometry, attributes: { name: handoff.name, destination: "Dock-side container staging; forklifts stop here and the berth crane transfers cargo to the ship." },
       symbol: { type: "simple-marker", style: "square", size: 12, color: "#f5c84c", outline: { color: "#18332e", width: 2 } },
       popupTemplate: popup("{name}", [["destination", "Handoff"]])
     }));
@@ -149,11 +187,13 @@ export async function initPicking({ view, metricsEl, trafficLayer }) {
       font: { family: "IBM Plex Sans", size: 9, weight: "bold" } } }));
   });
   view.map.add(handoffs);
+  const shipping = initShipping({ view, GraphicsLayer, Graphic });
   let extent = null;
   scenarios.current.placements.forEach((slot) => {
     const bounds = slot.geometry.extent;
     if (bounds) extent = extent ? extent.union(bounds) : bounds.clone();
   });
+  if (shipping.extent) extent = extent ? extent.union(shipping.extent) : shipping.extent.clone();
   const layers = {};
   const replay = {};
   for (const [id, scenario] of Object.entries(scenarios)) {
@@ -167,7 +207,7 @@ export async function initPicking({ view, metricsEl, trafficLayer }) {
       popupTemplate: popup("{forklift} · breadcrumb", [["timestamp", "Simulated time"], ["status", "Activity"], ["source", "Source"]])
     });
     const vehicles = new GraphicsLayer({ title: id === "current" ? "Current forklifts" : "Optimized forklifts", visible: false });
-    layers[id] = { storage: storageLayer, breadcrumbs, vehicles, records: new Map(), editing: false, replaySeconds: 0, epoch: Date.now() };
+    layers[id] = { storage: storageLayer, breadcrumbs, vehicles, records: new Map(), editing: false, refreshPending: false, replaySeconds: HISTORY_PREROLL_SECONDS, epoch: Date.now() - HISTORY_PREROLL_SECONDS * 1000 };
     for (const slot of scenario.placements) {
       const color = FREQUENCIES[slot.frequency].color;
       const symbol = slot.geometry.type === "polygon" ? { type: "simple-fill", color, outline: { color: "#fffef8", width: 0.5 } }
@@ -181,44 +221,49 @@ export async function initPicking({ view, metricsEl, trafficLayer }) {
     }
     breadcrumbs.opacity = 0.8;
     replay[id] = scenario.fleet.map((forklift, index) => {
+      const timeline = createReplayTimeline(forklift.trips);
+      const state = replayAtTime(timeline, HISTORY_PREROLL_SECONDS);
+      const trip = forklift.trips[state.tripIndex];
       const graphic = new Graphic({
-        geometry: { type: "point", x: forklift.trips[0].outbound.points[0][0], y: forklift.trips[0].outbound.points[0][1], spatialReference },
-        symbol: { type: "picture-marker", url: icon(forklift.color, false), width: FORKLIFT_SIZE, height: FORKLIFT_SIZE },
-        attributes: { forklift: forklift.id, scenario: prefix, role: forklift.role, status: "Returning empty to warehouse", battery: forklift.battery, source: "Accelerated simulated container moves; not GPS" },
+        geometry: { type: "point", x: state.point[0], y: state.point[1], spatialReference },
+        symbol: { type: "picture-marker", url: icon(forklift.color, state.loaded), width: FORKLIFT_SIZE, height: FORKLIFT_SIZE, angle: (state.bearing + 270) % 360 },
+        attributes: { forklift: forklift.id, scenario: prefix, role: forklift.role, storage: trip.slot.id, dock: trip.slot.dock.id, status: state.status, battery: forklift.battery, source: "Accelerated simulated container moves; not GPS" },
         popupTemplate: popup("{forklift} · {scenario}", [["role", "Assignment"], ["status", "Activity"], ["storage", "Warehouse pickup"], ["dock", "Quayside handoff"], ["battery", "Estimated battery (%)"], ["source", "Source"]])
       });
       vehicles.add(graphic);
-      return { forklift, graphic, tripIndex: 0, elapsed: 0, distance: 0, state: null };
+      return { forklift, graphic, timeline, originDistance: state.totalDistance, tripIndex: state.tripIndex, elapsed: state.elapsed, distance: 0, state };
     });
     view.map.addMany([storageLayer, breadcrumbs, vehicles]);
+    loader.update("layers", ++layerWork, 12);
   }
+  await Promise.all([handoffs, ...shipping.layers, ...Object.values(layers).flatMap((group) => [group.storage, group.breadcrumbs, group.vehicles])].map(async (layer) => {
+    await layer.load();
+    loader.update("layers", ++layerWork, 12);
+  }));
   const originalStorage = sourceLayers.filter((layer) => ["Racks", "RackLocations"].includes(layer.title));
+  let ready = false;
   let active = null, paused = false, speed = DEFAULT_REPLAY_SPEED, lastFrame = performance.now(), lastRender = 0;
   let showHeat = DEFAULT_HEAT_VISIBLE;
-  let selectedForklift = "all", historyDay = "rolling";
+  let selectedForklift = "all", historySeconds = HISTORY_WINDOWS[0].seconds;
   let lastBreadcrumbRender = 0;
   let trafficVisibility = null;
   async function updateTrails() {
     if (!active) return;
-    const group = layers[active], scenario = scenarios[active];
+    const group = layers[active];
     group.breadcrumbs.definitionExpression = selectedForklift === "all" ? null : `forklift = '${selectedForklift}'`;
     group.vehicles.graphics.forEach((graphic) => { graphic.visible = selectedForklift === "all" || graphic.attributes.forklift === selectedForklift; });
     group.breadcrumbs.visible = showHeat;
-    if (!showHeat || group.editing) return;
+    if (!showHeat) return;
+    if (group.editing) { group.refreshPending = true; return; }
     group.editing = true;
+    const clock = group.replaySeconds, epoch = group.epoch + clock * 1000;
+    const keyStride = Math.floor(HISTORY_PREROLL_SECONDS / HEAT_SAMPLE_SECONDS) + 1;
     const features = replay[active].flatMap((vehicle, forkliftIndex) => {
       const forklift = vehicle.forklift;
-      let tripIndex = vehicle.tripIndex, elapsed = vehicle.elapsed, epoch = group.epoch + group.replaySeconds * 1000;
-      if (historyDay !== "rolling") {
-        tripIndex = forklift.trips.findLastIndex((trip) => trip.day === Number(historyDay));
-        if (tripIndex < 0) return [];
-        elapsed = replayTrip(forklift.trips[tripIndex], Infinity).duration;
-        epoch = forklift.trips[tripIndex].timestamp;
-      }
-      return rollingBreadcrumbs(forklift.trips, tripIndex, elapsed).map((sample, sampleIndex) => new Graphic({
+      return movementHistory(vehicle.timeline, clock, historySeconds).map((sample, sampleIndex) => new Graphic({
         geometry: { type: "point", x: sample.point[0], y: sample.point[1], spatialReference },
-        attributes: { sampleKey: forkliftIndex * 100 + sampleIndex + 1, forklift: forklift.id, timestamp: breadcrumbTimestamp(epoch, sample.ageSeconds), status: sample.status,
-          source: "Rolling 30 simulated minutes; sampled every 30 simulated seconds. Not recorded GPS." }
+        attributes: { sampleKey: forkliftIndex * keyStride + sampleIndex + 1, forklift: forklift.id, timestamp: breadcrumbTimestamp(epoch, sample.ageSeconds), status: sample.status,
+          source: "Exact forklift replay positions, including queue stops; sampled every 30 simulated seconds. Not recorded GPS." }
       }));
     });
     try {
@@ -237,11 +282,15 @@ export async function initPicking({ view, metricsEl, trafficLayer }) {
       const failed = [...result.addFeatureResults, ...result.updateFeatureResults, ...result.deleteFeatureResults].find((feature) => feature.error);
       if (failed) throw failed.error;
     } catch (error) { console.warn("Could not update rolling breadcrumb points.", error); }
-    finally { group.editing = false; }
+    finally {
+      group.editing = false;
+      if (group.refreshPending) { group.refreshPending = false; void updateTrails(); }
+    }
   }
   const metric = (value, label, tone) => `<div class="kpi ${tone}"><div class="v">${value}</div><div class="l">${label}</div></div>`;
   function render() {
-    if (!active) return;
+    if (!active || !ready) return;
+    const showCompletion = loader.element.isConnected;
     const scenario = scenarios[active], total = scenario.total;
     const reduction = (1 - total.distance / scenarios.current.total.distance) * 100;
     const date = (timestamp) => new Date(timestamp).toISOString().slice(0, 10);
@@ -250,6 +299,9 @@ export async function initPicking({ view, metricsEl, trafficLayer }) {
       <div class="kpis mt">${metric(`${km(total.distance)} km`, "Weekly fleet travel", "blue")}${metric(`${hours(total.travelSeconds)} h`, "Weekly travel time", "green")}
       ${metric(total.picks.toLocaleString(), "Weekly container moves", "mint")}${metric(`${total.energy.toFixed(1)} kWh`, "Estimated traction energy", "peach")}</div>
       <dl class="picking-summary"><div><dt>Travel change vs current</dt><dd>${active === "current" ? "Baseline" : `${Math.abs(reduction).toFixed(1)}% ${reduction >= 0 ? "less" : "more"}`}</dd></div>
+      <div><dt>Routing plan</dt><dd>${escapeHtml(scenario.routePolicy)}</dd></div>
+      <div><dt>Cargo allocation</dt><dd>${scenario.fixedQuayAssignments ? "Fixed quay per cargo group" : "Nearest quay"}</dd></div>
+      <div><dt>Central corridor moves</dt><dd>${scenario.centralCorridorTrips.toLocaleString()} / week</dd></div>
       <div><dt>Weekly workload</dt><dd>${scenario.workloadUplift ? `+${(scenario.workloadUplift * 100).toFixed(0)}% (simulated)` : "Baseline"}</dd></div>
       <div><dt>Total travel + handling + delays</dt><dd>${hours(total.travelSeconds + total.handlingSeconds + total.congestionSeconds)} h / week</dd></div>
       <div><dt>Queue + maneuver delays</dt><dd>${hours(total.congestionSeconds)} h / week</dd></div>
@@ -262,7 +314,7 @@ export async function initPicking({ view, metricsEl, trafficLayer }) {
       <label>Replay <select id="pickSpeed" aria-label="Replay speed">${REPLAY_SPEEDS.map((value) => `<option value="${value}" ${speed === value ? "selected" : ""}>${value}x</option>`).join("")}</select></label></div>
       <div class="picking-controls mt"><label>Paths <select id="pickFleet" aria-label="Forklift paths"><option value="all">All forklifts</option>${scenario.fleet.map((forklift) => `<option value="${forklift.id}" ${selectedForklift === forklift.id ? "selected" : ""}>${forklift.id}</option>`).join("")}</select></label>
       <calcite-button id="pickHeatToggle" scale="s" appearance="${showHeat ? "solid" : "outline"}" icon-start="${showHeat ? "view-visible" : "view-hide"}" aria-pressed="${showHeat}" title="${showHeat ? "Hide travel heatmap" : "Show travel heatmap"}">Travel heat</calcite-button>
-      <label>History <select id="pickDay" aria-label="Breadcrumb history"><option value="rolling">Rolling 30 min</option>${Array.from({ length: 7 }, (_, day) => `<option value="${day}" ${historyDay === String(day) ? "selected" : ""}>${date(scenario.week.start + day * 86400000)}</option>`).join("")}</select></label></div>
+      <label>History <select id="pickDay" aria-label="Travel heat history">${HISTORY_WINDOWS.map((window) => `<option value="${window.seconds}" ${historySeconds === window.seconds ? "selected" : ""}>${window.label}</option>`).join("")}</select></label></div>
       <div class="section-title">Forklift fleet</div><div class="picking-fleet">${replay[active].map((vehicle) => {
         const forklift = vehicle.forklift;
         const battery = Math.max(0, forklift.battery - vehicle.distance / 1000 * ASSUMPTIONS.kwhPerKm / ASSUMPTIONS.batteryKwh * 100);
@@ -274,44 +326,47 @@ export async function initPicking({ view, metricsEl, trafficLayer }) {
           <div class="muted">${km(forklift.distance)} km · ${hours(forklift.travelSeconds)} h · ${forklift.picks} picks / week</div></article>`;
       }).join("")}</div>
       <div class="section-title">Storage frequency · baseline picks / week</div><div class="picking-legend">${Object.entries(FREQUENCIES).map(([label, frequency]) => `<span><i style="background:${frequency.color}"></i>${label} · ${frequency.daily * 7}</span>`).join("")}</div>
-      <p class="picking-disclaimer">${scenario.workloadUplift ? "Optimized workload assumes 5% additional container moves, rounded to whole containers; all travel and handling totals include them. This is an illustrative productivity scenario, not a measured increase. " : ""}Travel heat: relative density of routed samples in the rolling 30 simulated minutes, sampled every 30 seconds of replay time. Dated history shows a 30-minute window ending at that day's final synthetic event. Battery: estimated remaining since replay restart, traction only. ${ASSUMPTIONS.speed * 3.6} km/h; ${ASSUMPTIONS.pickSeconds}s pickup + ${ASSUMPTIONS.unloadSeconds}s quayside handoff; ${ASSUMPTIONS.batteryKwh} kWh battery; ${ASSUMPTIONS.kwhPerKm} kWh/km.</p>
-      <p class="picking-disclaimer">Aisle reservations model conflicts at shared rack approaches. Yielding includes a small on-route reverse, a queue stop and a forward clearance maneuver. Optimized high-volume stock is spread across picking areas; FL-04 serves the farthest quarter of reachable racks. This is illustrative traffic behavior, not a validated collision-avoidance system.</p>
-      <p class="picking-disclaimer">Every loaded trip runs from a warehouse pickup directly to QUAY-W or QUAY-E. Forklifts stop in land-side container staging; ships and crane operations are not animated. The yellow squares mark the two handoffs corresponding to the supplied image. Ground floor only. ${scenario.excluded} unreachable warehouse positions are retained on the map but excluded from travel totals. Routes use mapped land, doors and a 1.25 m grid; clearance and cargo capacity require operational validation. No WMS data or measured savings.</p>`;
+      <p class="picking-disclaimer">${scenario.workloadUplift ? "Optimized workload assumes 5% additional container moves, rounded to whole containers; all travel and handling totals include them. This is an illustrative productivity scenario, not a measured increase. " : ""}Travel heat uses the same timeline and positions as the forklifts, including stops and yielding, sampled every 30 simulated seconds. Larger windows add older movement without changing the density scale. Replay starts after a matching 12-hour simulated pre-roll. Battery: estimated remaining since replay restart, traction only. ${ASSUMPTIONS.speed * 3.6} km/h; ${ASSUMPTIONS.pickSeconds}s pickup + ${ASSUMPTIONS.unloadSeconds}s quayside handoff; ${ASSUMPTIONS.batteryKwh} kWh battery; ${ASSUMPTIONS.kwhPerKm} kWh/km.</p>
+      <p class="picking-disclaimer">Aisle reservations model conflicts at shared rack approaches. Yielding includes a small on-route reverse, a queue stop and a forward clearance maneuver. Optimized high-volume stock is spread across picking areas; FL-03 serves the central Warehouse E zone and FL-04 serves farther racks outside that zone. This is illustrative traffic behavior, not a validated collision-avoidance system.</p>
+      <p class="picking-disclaimer">Routing-plan assumption: the current operation uses the shared outer network. The proposed optimized operation enables the central link between Warehouses C and E and combines it with zoned dispatch. A synthetic cargo manifest fixes each cargo group's quay in both plans; optimized storage can move the cargo, not change its ship-loading destination. Every link still obeys mapped land and obstacle checks; opening that corridor requires operational approval.</p>
+      <p class="picking-disclaimer">Every loaded trip runs from a warehouse pickup directly to QUAY-W or QUAY-E. Forklifts remain on land; berth cranes move staged cargo onto stationary simulated ships. Two containers start staged at each berth. Ship fill increases only when a crane places a container. Ground floor only. ${scenario.excluded} unreachable warehouse positions are retained on the map but excluded from travel totals. Dimensions, cargo capacity and clearances are illustrative and require operational validation. No WMS data, AIS or measured savings.</p>`;
     metricsEl.querySelector("#pickPause").addEventListener("click", () => { paused = !paused; render(); });
-    metricsEl.querySelector("#pickReset").addEventListener("click", () => {
-      replay[active].forEach((vehicle) => { vehicle.tripIndex = 0; vehicle.elapsed = 0; vehicle.distance = 0; vehicle.state = null; });
-      layers[active].epoch = Date.now(); layers[active].replaySeconds = 0;
-      render();
-    });
+    metricsEl.querySelector("#pickReset").addEventListener("click", () => { resetReplay(active); render(); });
     metricsEl.querySelector("#pickSpeed").addEventListener("change", (event) => {
       speed = Number(event.target.value);
       if (speed === 400) flashRaceFlag();
     });
     metricsEl.querySelector("#pickFleet").addEventListener("change", (event) => { selectedForklift = event.target.value; updateTrails(); });
     metricsEl.querySelector("#pickHeatToggle").addEventListener("click", () => { showHeat = !showHeat; render(); });
-    metricsEl.querySelector("#pickDay").addEventListener("change", (event) => { historyDay = event.target.value; render(); updateTrails(); });
+    metricsEl.querySelector("#pickDay").addEventListener("change", (event) => { historySeconds = Number(event.target.value); void updateTrails(); });
+    if (showCompletion) metricsEl.prepend(loader.element);
     updateTrails();
+  }
+  function resetReplay(scenarioId) {
+    replay[scenarioId].forEach((vehicle) => {
+      const state = replayAtTime(vehicle.timeline, HISTORY_PREROLL_SECONDS);
+      vehicle.tripIndex = state.tripIndex; vehicle.elapsed = state.elapsed; vehicle.distance = 0; vehicle.state = state; vehicle.originDistance = state.totalDistance;
+      vehicle.graphic.geometry = { type: "point", x: state.point[0], y: state.point[1], spatialReference };
+      vehicle.graphic.symbol = { type: "picture-marker", url: icon(vehicle.forklift.color, state.loaded), width: FORKLIFT_SIZE, height: FORKLIFT_SIZE, angle: (state.bearing + 270) % 360 };
+      const trip = vehicle.forklift.trips[state.tripIndex];
+      Object.assign(vehicle.graphic.attributes, { status: state.status, battery: vehicle.forklift.battery, storage: trip.slot.id, dock: trip.slot.dock.id });
+    });
+    layers[scenarioId].epoch = Date.now() - HISTORY_PREROLL_SECONDS * 1000;
+    layers[scenarioId].replaySeconds = HISTORY_PREROLL_SECONDS;
+    shipping.reset(scenarioId);
   }
   function animate(now) {
     const elapsed = Math.min((now - lastFrame) / 1000, 0.5);
     lastFrame = now;
-    if (active && !paused && !document.hidden && layers[active].vehicles.visible) {
+    if (active && ready && !paused && !document.hidden) {
+      const previousClock = layers[active].replaySeconds;
       layers[active].replaySeconds += elapsed * speed;
       for (const vehicle of replay[active]) {
         const forklift = vehicle.forklift;
-        const before = vehicle.state?.traveled || 0;
-        vehicle.elapsed += elapsed * speed;
-        let trip = forklift.trips[vehicle.tripIndex];
-        let state = replayTrip(trip, vehicle.elapsed);
-        let traveled = state.traveled - before;
-        while (vehicle.elapsed >= state.duration) {
-          vehicle.elapsed -= state.duration;
-          vehicle.tripIndex = (vehicle.tripIndex + 1) % forklift.trips.length;
-          trip = forklift.trips[vehicle.tripIndex];
-          state = replayTrip(trip, vehicle.elapsed);
-          traveled += state.traveled;
-        }
-        vehicle.distance += Math.max(0, traveled);
+        const state = replayAtTime(vehicle.timeline, layers[active].replaySeconds);
+        const trip = forklift.trips[state.tripIndex];
+        vehicle.distance += Math.max(0, state.totalDistance - (vehicle.state?.totalDistance ?? vehicle.originDistance));
+        vehicle.tripIndex = state.tripIndex; vehicle.elapsed = state.elapsed;
         vehicle.state = state;
         const battery = Math.max(0, forklift.battery - vehicle.distance / 1000 * ASSUMPTIONS.kwhPerKm / ASSUMPTIONS.batteryKwh * 100);
         vehicle.graphic.geometry = { type: "point", x: state.point[0], y: state.point[1], spatialReference };
@@ -326,16 +381,58 @@ export async function initPicking({ view, metricsEl, trafficLayer }) {
           if (activity) activity.textContent = `${state.status} · ${state.loaded ? trip.slot.dock.id : trip.slot.id}`;
         }
       }
+      shipping.advance(active, previousClock, layers[active].replaySeconds, replay[active]);
       if (now - lastRender > 700) lastRender = now;
-      if (now - lastBreadcrumbRender > 3000) { void updateTrails(); lastBreadcrumbRender = now; }
+      if (now - lastBreadcrumbRender > 1000) { void updateTrails(); lastBreadcrumbRender = now; }
     }
     requestAnimationFrame(animate);
   }
   requestAnimationFrame(animate);
   return {
     extent,
+    reset() {
+      showHeat = DEFAULT_HEAT_VISIBLE;
+      historySeconds = HISTORY_WINDOWS[0].seconds;
+      selectedForklift = "all";
+      speed = DEFAULT_REPLAY_SPEED;
+      paused = false;
+      Object.keys(replay).forEach(resetReplay);
+      active = null;
+      metricsEl.hidden = true;
+      handoffs.visible = true;
+      Object.values(layers).forEach((group) => {
+        group.storage.visible = false;
+        group.breadcrumbs.visible = false;
+        group.vehicles.visible = false;
+      });
+      if (trafficLayer && trafficVisibility !== null) {
+        trafficLayer.visible = trafficVisibility;
+        trafficVisibility = null;
+      }
+    },
+    async completeLoading() {
+      if (ready) return;
+      const visible = [...shipping.layers, ...(active ? [handoffs, layers[active].storage, layers[active].vehicles] : [])];
+      await Promise.all(visible.map(async (layer) => {
+        const layerView = await view.whenLayerView(layer);
+        await reactiveUtils.whenOnce(() => !layerView.updating);
+      }));
+      if (!document.hidden) await new Promise((resolve) => requestAnimationFrame(resolve));
+      loader.update("layers", ++layerWork, 12);
+      ready = true;
+      loader.element.dataset.ready = "true";
+      loader.update("ready", 1, 1, true);
+      if (active) {
+        render();
+        const animation = loader.element.animate([{ opacity: 1 }, { opacity: 1, offset: 0.7 }, { opacity: 0 }], {
+          duration: matchMedia("(prefers-reduced-motion: reduce)").matches ? 1 : 800, easing: "steps(3, end)"
+        });
+        animation.finished.finally(() => loader.element.remove()).catch(() => {});
+      } else loader.element.remove();
+    },
     setActive(id) {
       active = id;
+      shipping.setActive(id);
       metricsEl.hidden = !id;
       handoffs.visible = Boolean(id);
       Object.entries(layers).forEach(([scenarioId, group]) => {
